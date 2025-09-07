@@ -1,0 +1,27 @@
+{
+  "name": "table-git",
+  "version": "1.0.0",
+  "description": "A Git-inspired version control system for tables with cell-level granularity",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "start": "node dist/index.js",
+    "clean": "rimraf dist"
+  },
+  "keywords": ["version-control", "table", "git", "typescript"],
+  "author": "Table Version Control Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/jest": "^29.0.0",
+    "typescript": "^5.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "rimraf": "^5.0.0"
+  },
+  "dependencies": {
+  }
+}
