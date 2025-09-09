@@ -23,25 +23,37 @@ npm install table-git
 
 ### 快速演示
 
-运行内置演示查看系统功能：
+两种方式体验项目功能：
+
+1) 浏览器交互 Demo（推荐）
 
 ```bash
 git clone <repository-url>
 cd table-git
 npm install
 npm run build
-node demo.js
+npm run demo:bundle
+npm run demo:serve
 ```
 
-这将展示：
-- 创建示例表格
-- 添加产品数据
-- 创建分支进行价格调整
-- 删除行操作演示
-- 行排序功能演示
-- 切换到历史提交（detached HEAD）
-- 查看提交历史
-- 演示分支切换
+然后打开浏览器访问 http://localhost:8080
+
+在页面中可以：
+- 初始化示例数据、提交（填写作者/邮箱/信息）
+- 创建/切换分支、返回 main
+- 调整价格、删除第 2 行、添加更多产品、排序
+- 切到历史提交（演示 detached HEAD）
+- 实时查看列结构、分支、提交历史（列表形式）
+- 使用格式化器预览 HTML / CSV / JSON 输出
+
+2) 纯静态导出（生成 HTML/CSV/JSON 文件）
+
+```bash
+npm run build
+npm run demo:build
+```
+
+生成文件位于 `demo/` 目录：`table.html`、`data.csv`、`data.json`
 
 ### 基础使用
 
@@ -51,18 +63,21 @@ import { createTableGit, createColumn } from 'table-git';
 // 创建新的表格仓库
 const repo = createTableGit('main');
 
-// 添加列定义
-const column = createColumn('产品名称', {
+// 添加列定义（ColumnMetadata 无 name 字段，使用 id 代表列标识）
+const nameCol = createColumn('product_name', {
   dataType: 'string',
   width: 150,
-  constraints: { required: true }
+  order: 0,
+  constraints: { required: true },
 });
+const priceCol = createColumn('price', { dataType: 'number', width: 100, order: 1 });
 
-repo.addColumn('Sheet1', column);
+repo.addColumn('default', nameCol);
+repo.addColumn('default', priceCol);
 
-// 添加数据
-repo.addCellChange('Sheet1', 1, 1, 'iPhone 15');
-repo.addCellChange('Sheet1', 1, 2, 5999);
+// 添加数据（示例：从第 1 行开始写数据，第 0 行可作为表头）
+repo.addCellChange('default', 1, 0, 'iPhone 15');
+repo.addCellChange('default', 1, 1, 5999);
 
 // 提交变更
 const commitHash = repo.commit('初始化产品表', 'Alice', 'alice@example.com');
@@ -77,7 +92,7 @@ repo.createBranch('feature-branch');
 repo.checkout('feature-branch');
 
 // 在分支中进行修改
-repo.addCellChange('Sheet1', 1, 2, 6299); // 调整价格
+repo.addCellChange('default', 1, 1, 6299); // 调整价格
 repo.commit('价格调整', 'Bob', 'bob@example.com');
 
 // 切换回主分支
@@ -85,7 +100,7 @@ repo.checkout('main');
 
 // 切换到历史提交（detached HEAD）
 const history = repo.getCommitHistory();
-repo.checkoutCommit(history[1].hash); // 切换到第二个提交
+repo.checkout(history[1].hash); // 传入提交哈希
 ```
 
 ### 行操作
@@ -93,17 +108,42 @@ repo.checkoutCommit(history[1].hash); // 切换到第二个提交
 ```typescript
 // 添加行
 const row = createRow({ height: 30 });
-repo.addRow('Sheet1', row);
+repo.addRow('default', row);
 
 // 删除行
-repo.deleteRow('Sheet1', 'row_id_123');
+repo.deleteRow('default', row.id);
 
-// 排序行
-repo.sortRows('Sheet1', [
-  { columnId: 'price_column', ascending: false }
+// 排序行（示例：按某列升序）
+repo.sortRows('default', [
+  { columnId: 'price', ascending: true }
 ]);
 
 repo.commit('行操作示例', 'User', 'user@example.com');
+```
+
+### 格式化输出（HTML / CSV / JSON）
+
+借助“函数式格式化器”实现格式解耦，支持内置与自定义格式。
+
+```typescript
+import {
+  TableDataAdapter,
+  FormatterRegistry,
+  FunctionFormatter,
+  csvFormatter,
+  jsonFormatter,
+  htmlFormatter,
+} from 'table-git';
+
+const data = new TableDataAdapter(repo).build();
+const registry = new FormatterRegistry();
+registry.register(new FunctionFormatter({ name: 'csv', format: csvFormatter }));
+registry.register(new FunctionFormatter({ name: 'json', format: jsonFormatter }));
+registry.register(new FunctionFormatter({ name: 'html', format: htmlFormatter }));
+
+const csv = registry.format('csv', data, { includeHeader: true, quoteText: true });
+const json = registry.format('json', data, { shape: 'rows', space: 2 });
+const html = registry.format('html', data, { includeHeader: true });
 ```
 
 ### 合并和冲突解决
@@ -250,29 +290,48 @@ npm run dev
 
 # 清理构建文件
 npm run clean
+
+# 浏览器 Demo 打包与预览
+npm run demo:bundle
+npm run demo:serve
+
+# 纯静态导出（生成 HTML/CSV/JSON）
+npm run demo:build
 ```
 
 ## 📋 项目结构
 
 ```
 src/
-├── core/                 # 核心功能
-│   ├── cell.ts          # 单元格对象
-│   ├── structure.ts     # 表结构管理
-│   ├── sheet.ts         # 工作表树
-│   ├── commit.ts        # 提交对象
-│   ├── table-git.ts     # 主版本控制引擎
-│   ├── diff-merge.ts    # 差异比较和合并
+├── core/                     # 核心功能
+│   ├── cell.ts              # 单元格对象
+│   ├── structure.ts         # 表结构管理
+│   ├── sheet.ts             # 工作表树
+│   ├── commit.ts            # 提交对象
+│   ├── table-git.ts         # 主版本控制引擎
+│   ├── diff-merge.ts        # 差异比较和合并
 │   └── conflict-resolver.ts # 冲突解决
-├── types/               # 类型定义
+├── formatters/              # 函数式格式化器
+│   ├── types.ts             # TableData/FormatterFunction 类型
+│   ├── adapter.ts           # TableDataAdapter（统一数据抽象）
+│   ├── function-formatter.ts# FunctionFormatter/Registry
+│   └── builtin.ts           # csv/json/html 格式函数
+├── types/                   # 类型定义
 │   └── index.ts
-├── utils/               # 工具函数
-│   ├── hash.ts         # 哈希和工具函数
-│   └── factory.ts      # 便利创建函数
-└── index.ts            # 主入口文件
+├── utils/                   # 工具函数
+│   ├── hash.ts             # 哈希和工具函数
+│   └── factory.ts          # 便利创建函数
+└── index.ts                # 主入口文件
 
-tests/                   # 测试文件
-examples/               # 使用示例
+demo/                        # 浏览器交互演示（独立）
+├── index.html
+├── app.ts -> bundle.js
+├── esbuild.config.js
+├── server.js               # 轻量静态服务器（npm run demo:serve）
+└── build-demo.js           # 纯静态导出（npm run demo:build）
+
+tests/                       # 测试文件
+examples/                    # 使用示例
 ```
 
 ## 🎯 使用场景
@@ -301,16 +360,10 @@ examples/               # 使用示例
 运行示例：
 
 ```bash
+# 浏览器交互演示（推荐）
 npm run build
-node demo.js
-```
-
-或者运行完整示例：
-
-```bash
-npm run dev
-# 然后在另一个终端运行
-node dist/examples/usage-examples.js
+npm run demo:bundle
+npm run demo:serve
 ```
 
 ## 🤝 贡献
