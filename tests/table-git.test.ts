@@ -28,7 +28,7 @@ describe('TableGit 基础功能测试', () => {
   });
 
   test('应该能够添加和管理列结构', () => {
-    const column = createColumn('测试列', {
+    const column = createColumn('test_column', {
       dataType: 'string',
       width: 150,
       constraints: { required: true }
@@ -163,9 +163,9 @@ describe('表格结构操作测试', () => {
   });
 
   test('应该能够移动列位置', () => {
-    const col1 = createColumn('列1', { order: 0 });
-    const col2 = createColumn('列2', { order: 1 });
-    const col3 = createColumn('列3', { order: 2 });
+    const col1 = createColumn('col1', { order: 0 });
+    const col2 = createColumn('col2', { order: 1 });
+    const col3 = createColumn('col3', { order: 2 });
     
     repo.addColumn('Sheet1', col1);
     repo.addColumn('Sheet1', col2);
@@ -182,21 +182,21 @@ describe('表格结构操作测试', () => {
   });
 
   test('应该能够更新列信息', () => {
-    const column = createColumn('原始名称');
+    const column = createColumn('test_col');
     
     repo.addColumn('Sheet1', column);
     repo.commit('添加列', 'Test User', 'test@example.com');
     
-    repo.updateColumn('Sheet1', column.id, { name: '更新后的名称' });
-    repo.commit('更新列名', 'Test User', 'test@example.com');
+    repo.updateColumn('Sheet1', column.id, { description: '更新后的描述' });
+    repo.commit('更新列描述', 'Test User', 'test@example.com');
     
     const workingTree = repo.getWorkingTree();
     const updatedColumn = workingTree?.structure.getColumn(column.id);
-    expect(updatedColumn?.name).toBe('更新后的名称');
+    expect(updatedColumn?.description).toBe('更新后的描述');
   });
 
   test('应该能够删除列', () => {
-    const column = createColumn('要删除的列');
+    const column = createColumn('delete_col');
     
     repo.addColumn('Sheet1', column);
     repo.commit('添加列', 'Test User', 'test@example.com');
@@ -227,6 +227,37 @@ describe('表格结构操作测试', () => {
     workingTree = repo.getWorkingTree();
     expect(workingTree?.structure.rows.has('row_1')).toBe(false);
     expect(workingTree?.structure.rows.has('row_2')).toBe(true);
+  });
+
+  test('应该能够像普通单元格一样操作列头', () => {
+    // 添加列结构
+    const col1 = createColumn('product_name', { dataType: 'string' });
+    const col2 = createColumn('price', { dataType: 'number' });
+    
+    repo.addColumn('default', col1);
+    repo.addColumn('default', col2);
+    
+    // 设置列头（第0行）- 就像普通单元格一样
+    repo.addCellChange('default', 0, 0, '产品名称', undefined, { fontWeight: 'bold' });
+    repo.addCellChange('default', 0, 1, '价格', undefined, { fontWeight: 'bold' });
+    
+    // 添加数据行
+    repo.addCellChange('default', 1, 0, 'iPhone 15');
+    repo.addCellChange('default', 1, 1, 5999);
+    
+    repo.commit('添加表格数据', 'Test User', 'test@example.com');
+    
+    // 验证列头和数据都是普通单元格
+    expect(repo.getCellValue(0, 0)).toBe('产品名称');
+    expect(repo.getCellValue(0, 1)).toBe('价格');
+    expect(repo.getCellValue(1, 0)).toBe('iPhone 15');
+    expect(repo.getCellValue(1, 1)).toBe(5999);
+    
+    // 列头可以像普通单元格一样修改
+    repo.addCellChange('default', 0, 0, '商品名称');
+    repo.commit('修改列头', 'Test User', 'test@example.com');
+    
+    expect(repo.getCellValue(0, 0)).toBe('商品名称');
   });
 });
 

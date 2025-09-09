@@ -29,9 +29,8 @@ export function createCell(
  * 创建列元数据的便利函数
  */
 export function createColumn(
-  name: string,
+  id?: string,
   options: {
-    id?: string;
     description?: string;
     dataType?: 'string' | 'number' | 'date' | 'boolean' | 'mixed';
     width?: number;
@@ -47,8 +46,7 @@ export function createColumn(
   } = {}
 ): ColumnMetadata {
   return {
-    id: options.id || generateId('col_'),
-    name,
+    id: id || generateId('col_'),
     description: options.description,
     dataType: options.dataType || 'mixed',
     width: options.width || 100,
@@ -83,26 +81,26 @@ export function createRow(
 export function createSampleTable(): TableGit {
   const repo = createTableGit();
   
-  // 添加列定义
+  // 添加列定义 - 只需要id，不需要name
   const columns = [
-    createColumn('产品名称', { 
+    createColumn('product_name', { 
       dataType: 'string', 
       width: 150, 
       order: 0,
       constraints: { required: true }
     }),
-    createColumn('价格', { 
+    createColumn('price', { 
       dataType: 'number', 
       width: 100, 
       order: 1,
       constraints: { required: true, min: 0 }
     }),
-    createColumn('库存', { 
+    createColumn('stock', { 
       dataType: 'number', 
       width: 100, 
       order: 2
     }),
-    createColumn('描述', { 
+    createColumn('description', { 
       dataType: 'string', 
       width: 200, 
       order: 3
@@ -112,21 +110,27 @@ export function createSampleTable(): TableGit {
   // 添加列到表格
   columns.forEach(col => repo.addColumn('default', col));
   
-  // 添加示例数据
-  repo.addCellChange('default', 1, 1, 'iPhone 15', undefined, { fontWeight: 'bold' });
-  repo.addCellChange('default', 1, 2, 5999);
-  repo.addCellChange('default', 1, 3, 100);
-  repo.addCellChange('default', 1, 4, '最新款iPhone');
+  // 第0行作为列头，和普通单元格一样处理
+  repo.addCellChange('default', 0, 0, '产品名称', undefined, { fontWeight: 'bold' });
+  repo.addCellChange('default', 0, 1, '价格', undefined, { fontWeight: 'bold' });
+  repo.addCellChange('default', 0, 2, '库存', undefined, { fontWeight: 'bold' });
+  repo.addCellChange('default', 0, 3, '描述', undefined, { fontWeight: 'bold' });
   
-  repo.addCellChange('default', 2, 1, 'MacBook Pro', undefined, { fontWeight: 'bold' });
-  repo.addCellChange('default', 2, 2, 12999);
-  repo.addCellChange('default', 2, 3, 50);
-  repo.addCellChange('default', 2, 4, '专业级笔记本电脑');
+  // 添加数据行
+  repo.addCellChange('default', 1, 0, 'iPhone 15');
+  repo.addCellChange('default', 1, 1, 5999);
+  repo.addCellChange('default', 1, 2, 100);
+  repo.addCellChange('default', 1, 3, '最新款iPhone');
   
-  repo.addCellChange('default', 3, 1, 'iPad Air', undefined, { fontWeight: 'bold' });
-  repo.addCellChange('default', 3, 2, 4599);
-  repo.addCellChange('default', 3, 3, 75);
-  repo.addCellChange('default', 3, 4, '轻薄平板电脑');
+  repo.addCellChange('default', 2, 0, 'MacBook Pro');
+  repo.addCellChange('default', 2, 1, 12999);
+  repo.addCellChange('default', 2, 2, 50);
+  repo.addCellChange('default', 2, 3, '专业级笔记本电脑');
+  
+  repo.addCellChange('default', 3, 0, 'iPad Air');
+  repo.addCellChange('default', 3, 1, 4599);
+  repo.addCellChange('default', 3, 2, 75);
+  repo.addCellChange('default', 3, 3, '轻薄平板电脑');
   
   // 提交初始数据
   repo.commit('初始化产品表', 'System', 'system@example.com');

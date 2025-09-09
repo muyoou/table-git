@@ -522,4 +522,6 @@ export class TableGit {
     
     return this.getObject(cellHash) as CellObject;
   }
+
+
 }

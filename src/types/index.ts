@@ -35,7 +35,6 @@ export interface CellFormat {
  */
 export interface ColumnMetadata {
   id: string;
-  name: string;
   description?: string;
   dataType?: 'string' | 'number' | 'date' | 'boolean' | 'mixed';
   width?: number;

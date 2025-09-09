@@ -227,7 +227,6 @@ export class ConflictResolver {
     // 智能合并列元数据
     const merged: ColumnMetadata = {
       id: current.id,
-      name: this.mergeStringField(base?.name, current.name, target.name),
       description: this.mergeStringField(base?.description, current.description, target.description),
       dataType: current.dataType !== base?.dataType ? current.dataType : target.dataType,
       width: current.width !== base?.width ? current.width : target.width,
