@@ -12,7 +12,9 @@ export class TableDataAdapter {
    * @param source 可选：从其他分支或指定提交预览（不需要 checkout）
    */
   build(source?: { branch?: string; commit?: string }): TableData {
-    const sheet: SheetTree | undefined = source ? this.repo.getTreeSnapshot(source) : this.repo.getWorkingTree();
+    const sheet: SheetTree | undefined = source
+      ? this.repo.getTreeSnapshot(source)
+      : this.repo.getPreviewTree({ includeStaged: true });
     if (!sheet) {
       return { header: [], rows: [], matrix: [], minRow: 0, minCol: 0, maxRow: -1, maxCol: -1 };
     }

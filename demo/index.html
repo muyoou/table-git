@@ -38,25 +38,16 @@
         <h2>操作</h2>
         <div class="controls">
           <button id="btn-init" class="primary">初始化示例数据</button>
-          <input id="author" placeholder="作者" value="Demo User" />
-          <input id="email" placeholder="邮箱" value="demo@example.com" />
-          <input id="message" class="wide" placeholder="提交信息" value="演示提交" />
-          <button id="btn-commit">提交</button>
         </div>
         <div class="controls">
           <input id="branch" placeholder="分支名" value="price-update" />
           <button id="btn-create-branch">创建分支</button>
-          <button id="btn-checkout">切换分支</button>
-          <button id="btn-back-main">切换回 main</button>
         </div>
         <div class="controls">
-          <button id="btn-adjust">调整价格</button>
-          <button id="btn-delete-row">删除第2行</button>
-          <button id="btn-add-more">添加更多产品</button>
-          <button id="btn-sort">按价格排序</button>
-        </div>
-        <div class="controls">
-          <button id="btn-checkout-prev">切到倒数第二个提交</button>
+          <input id="commit-message" placeholder="提交消息" style="min-width:220px" />
+          <input id="commit-author" placeholder="提交人" value="User" />
+          <input id="commit-email" placeholder="邮箱" value="user@example.com" />
+          <button id="btn-commit" class="primary">提交变更</button>
         </div>
         <div class="muted" id="status"></div>
       </div>
@@ -66,6 +57,8 @@
         <div id="columns" class="cols">(初始化后显示)</div>
         <h2>分支</h2>
         <div id="branches" class="cols">(初始化后显示)</div>
+  <h2>暂存区</h2>
+  <div id="staged" class="cols">(初始化后显示)</div>
         <h2>提交历史</h2>
         <div id="history" class="cols">(初始化后显示)</div>
       </div>
@@ -74,6 +67,10 @@
     <div class="row" style="margin-top:16px">
       <div class="card col">
         <h2>表格数据</h2>
+        <div class="controls">
+          <button id="btn-insert-col">插入列</button>
+          <button id="btn-insert-row">插入行</button>
+        </div>
         <div id="grid" class="grid"></div>
       </div>
       <div class="card col">

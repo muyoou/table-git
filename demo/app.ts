@@ -8,6 +8,7 @@ import {
 	jsonFormatter,
 	htmlFormatter,
 } from '../src/index.ts';
+import { createColumn, createRow, generateId, ChangeType } from '../src/index.ts';
 
 type El = HTMLElement | null;
 const $ = (id: string) => document.getElementById(id);
@@ -57,44 +58,83 @@ function refreshAll() {
 	const branches = repo.getBranches();
 	const current = repo.getCurrentBranch();
 			// 分支列表：附带预览按钮
-			{
-				const lines = branches.map(b => {
-					const label = `${b === current ? '★ ' : ''}${b}`;
-					const id = `preview-branch-${b}`;
-					return `<span>${escapeHtml(label)}</span> <button data-preview-branch="${escapeHtml(b)}" class="mini">预览</button>`;
-				});
-				const el = $("branches");
-				if (el) {
-					setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
-					// 绑定事件
-					el.querySelectorAll('button[data-preview-branch]').forEach(btn => {
-						btn.addEventListener('click', () => {
-							const branch = (btn as HTMLButtonElement).getAttribute('data-preview-branch')!;
-							previewFrom({ branch }, `分支: ${branch}`);
-						});
+				{
+					const lines = branches.map(b => {
+						const label = `${b === current ? '★ ' : ''}${b}`;
+						return `<span>${escapeHtml(label)}</span>
+							<button data-preview-branch="${escapeHtml(b)}" class="mini">预览</button>
+							<button data-checkout-branch="${escapeHtml(b)}" class="mini">切换</button>`;
 					});
+					const el = $("branches");
+					if (el) {
+						setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
+						// 预览
+						el.querySelectorAll('button[data-preview-branch]').forEach(btn => {
+							btn.addEventListener('click', () => {
+								const branch = (btn as HTMLButtonElement).getAttribute('data-preview-branch')!;
+								previewFrom({ branch }, `分支: ${branch}`);
+							});
+						});
+						// 切换
+						el.querySelectorAll('button[data-checkout-branch]').forEach(btn => {
+							btn.addEventListener('click', () => {
+								if (!repo) return;
+								const branch = (btn as HTMLButtonElement).getAttribute('data-checkout-branch')!;
+								try { repo.checkout(branch); } catch (e) { console.warn(e); }
+								refreshAll();
+							});
+						});
+					}
 				}
-			}
+
+					// staged changes
+					{
+						const changes = repo.getStagedChanges();
+						const lines = changes.map((ch) => {
+							const when = new Date(ch.timestamp).toLocaleTimeString();
+							let label: string = String(ch.type);
+							if (ch.type === ChangeType.CELL_ADD || ch.type === ChangeType.CELL_UPDATE || ch.type === ChangeType.CELL_DELETE) {
+								const d = ch.details as any;
+								const pos = (d && typeof d.row === 'number' && typeof d.column === 'number') ? ` (${d.row},${d.column})` : '';
+								const val = (d && 'value' in d) ? ` = ${String(d.value ?? '')}` : '';
+								label = `${ch.type}${pos}${val}`;
+							}
+							return `${label} @${ch.sheetName} ${when}`;
+						});
+						renderList('staged', lines.length ? lines : ['(空)']);
+					}
 
 	// history
 	const hist = repo.getCommitHistory(10);
 			// 历史提交：附带预览按钮
-			{
-				const lines = hist.map((c) => {
-					const label = `${c.getShortHash()} - ${c.message}`;
-					return `<span>${escapeHtml(label)}</span> <button data-preview-commit="${escapeHtml(c.hash)}" class="mini">预览</button>`;
-				});
-				const el = $("history");
-				if (el) {
-					setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
-					el.querySelectorAll('button[data-preview-commit]').forEach(btn => {
-						btn.addEventListener('click', () => {
-							const commit = (btn as HTMLButtonElement).getAttribute('data-preview-commit')!;
-							previewFrom({ commit }, `提交: ${commit.substring(0,7)}`);
-						});
+				{
+					const lines = hist.map((c) => {
+						const label = `${c.getShortHash()} - ${c.message}`;
+						return `<span>${escapeHtml(label)}</span>
+							<button data-preview-commit="${escapeHtml(c.hash)}" class="mini">预览</button>
+							<button data-checkout-commit="${escapeHtml(c.hash)}" class="mini">切换</button>`;
 					});
+					const el = $("history");
+					if (el) {
+						setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
+						// 预览
+						el.querySelectorAll('button[data-preview-commit]').forEach(btn => {
+							btn.addEventListener('click', () => {
+								const commit = (btn as HTMLButtonElement).getAttribute('data-preview-commit')!;
+								previewFrom({ commit }, `提交: ${commit.substring(0,7)}`);
+							});
+						});
+						// 切换
+						el.querySelectorAll('button[data-checkout-commit]').forEach(btn => {
+							btn.addEventListener('click', () => {
+								if (!repo) return;
+								const commit = (btn as HTMLButtonElement).getAttribute('data-checkout-commit')!;
+								try { repo.checkout(commit); } catch (e) { console.warn(e); }
+								refreshAll();
+							});
+						});
+					}
 				}
-			}
 
 	// grid
 	renderGrid();
@@ -109,18 +149,30 @@ function renderGrid() {
 
 	// 粗略渲染矩阵（包含表头）
 	const adapter = new TableDataAdapter(repo);
-	const data = adapter.build();
+	const data = adapter.build(); // 默认包含暂存区的临时预览
 	const rows = data.matrix;
-	const html = [`<table>`]
-	if (data.header.length) {
+	const hasHeader = data.header.length > 0;
+
+	const html: string[] = ['<table>'];
+	if (hasHeader && rows.length) {
 		html.push('<thead><tr>');
-		html.push(...data.header.map(h => `<th>${h ?? ''}</th>`));
+		for (let c = 0; c < rows[0].length; c++) {
+			const rowIdx = data.minRow + 0;
+			const colIdx = data.minCol + c;
+			const val = rows[0]?.[c] ?? '';
+			html.push(`<th>${val ?? ''} <button class="mini" data-edit-row="${rowIdx}" data-edit-col="${colIdx}">修改</button></th>`);
+		}
 		html.push('</tr></thead>');
 	}
 	html.push('<tbody>');
-	for (const row of (data.header.length ? data.rows : rows)) {
+	for (let r = hasHeader ? 1 : 0; r < rows.length; r++) {
 		html.push('<tr>');
-		html.push(...(row ?? []).map(cell => `<td>${cell ?? ''}</td>`));
+		for (let c = 0; c < rows[r].length; c++) {
+			const rowIdx = data.minRow + r;
+			const colIdx = data.minCol + c;
+			const val = rows[r]?.[c] ?? '';
+			html.push(`<td>${val ?? ''} <button class="mini" data-edit-row="${rowIdx}" data-edit-col="${colIdx}">修改</button></td>`);
+		}
 		html.push('</tr>');
 	}
 	html.push('</tbody></table>');
@@ -130,7 +182,7 @@ function renderGrid() {
 function refreshPreview() {
 	if (!repo) return;
 	const adapter = new TableDataAdapter(repo);
-	const data = adapter.build();
+	const data = adapter.build(); // 默认包含暂存区的临时预览
 	const html = registry.format('html', data, { includeHeader: true });
 	const csv = registry.format('csv', data, { includeHeader: true, quoteText: true });
 	const json = registry.format('json', data, { shape: 'rows', space: 2 });
@@ -183,66 +235,109 @@ function bindTabs() {
 
 function bindActions() {
 	($("btn-init") as HTMLButtonElement).onclick = () => { repo = createSampleTable(); refreshAll(); };
-	($("btn-commit") as HTMLButtonElement).onclick = () => {
+	($("btn-create-branch") as HTMLButtonElement).onclick = () => {
 		if (!repo) return;
-		const author = (document.getElementById('author') as HTMLInputElement).value || 'Demo User';
-		const email = (document.getElementById('email') as HTMLInputElement).value || 'demo@example.com';
-		const message = (document.getElementById('message') as HTMLInputElement).value || '演示提交';
-		try { repo.commit(message, author, email); } catch (e) { console.warn(e); }
-		refreshAll();
-	};
-	($("btn-create-branch") as HTMLButtonElement).onclick = () => { if (!repo) return; const b = (document.getElementById('branch') as HTMLInputElement).value || 'temp'; repo.createBranch(b); refreshAll(); };
-	($("btn-checkout") as HTMLButtonElement).onclick = () => { if (!repo) return; const b = (document.getElementById('branch') as HTMLInputElement).value || 'main'; try { repo.checkout(b); } catch(e) { console.warn(e); } refreshAll(); };
-	($("btn-back-main") as HTMLButtonElement).onclick = () => { if (!repo) return; try { repo.checkout('main'); } catch(e) { console.warn(e); } refreshAll(); };
-
-	// 业务操作参考 demo.js
-	($("btn-adjust") as HTMLButtonElement).onclick = () => {
-		if (!repo) return;
-		repo.addCellChange('default', 1, 2, 6999);
-		repo.addCellChange('default', 2, 2, 13999);
-		try { repo.commit('调整产品价格', 'Sales Manager', 'sales@company.com'); } catch(e) {}
+		const b = (document.getElementById('branch') as HTMLInputElement).value || 'temp';
+		repo.createBranch(b);
 		refreshAll();
 	};
 
-	($("btn-delete-row") as HTMLButtonElement).onclick = () => {
-		if (!repo) return;
-		// 添加行元数据->删除第2行
-		repo.addRow('default', { id: 'row_2', height: 25, hidden: false, order: 1 });
-		try { repo.commit('添加行元数据', 'Data Manager', 'data@company.com'); } catch(e) {}
-		repo.deleteCellChange('default', 2, 1);
-		repo.deleteCellChange('default', 2, 2);
-		repo.deleteCellChange('default', 2, 3);
-		repo.deleteCellChange('default', 2, 4);
-		repo.deleteRow('default', 'row_2');
-		try { repo.commit('删除MacBook Pro产品行', 'Product Manager', 'pm@company.com'); } catch(e) {}
-		refreshAll();
-	};
+	// 表格内的“修改”按钮（事件委托，修改后仅暂存，不自动提交）
+	const grid = document.getElementById('grid');
+	if (grid) {
+		grid.addEventListener('click', (e) => {
+			const target = e.target as HTMLElement;
+			if (!target) return;
+			const btn = target.closest('button[data-edit-row][data-edit-col]') as HTMLButtonElement | null;
+			if (!btn) return;
+			if (!repo) return;
+			const rowStr = btn.getAttribute('data-edit-row');
+			const colStr = btn.getAttribute('data-edit-col');
+			if (!rowStr || !colStr) return;
+			const row = parseInt(rowStr, 10);
+			const col = parseInt(colStr, 10);
 
-	($("btn-add-more") as HTMLButtonElement).onclick = () => {
-		if (!repo) return;
-		repo.addCellChange('default', 4, 1, 'Apple Watch');
-		repo.addCellChange('default', 4, 2, 2999);
-		repo.addCellChange('default', 4, 3, 200);
-		repo.addCellChange('default', 4, 4, '智能手表');
-		repo.addCellChange('default', 5, 1, 'AirPods Pro');
-		repo.addCellChange('default', 5, 2, 1999);
-		repo.addCellChange('default', 5, 3, 150);
-		repo.addCellChange('default', 5, 4, '无线耳机');
-		try { repo.commit('添加更多产品', 'Product Manager', 'pm@company.com'); } catch(e) {}
-		refreshAll();
-	};
+			// 读取当前值作为默认内容（基于工作区）
+			const currentVal = repo.getCellValue(row, col);
+			const next = window.prompt(`修改单元格 (${row}, ${col}) 的值：`, currentVal != null ? String(currentVal) : '');
+			if (next === null) return; // 用户取消
 
-	($("btn-sort") as HTMLButtonElement).onclick = () => { if (!repo) return; repo.sortRows('default', [{ columnId: 'col_2', ascending: true }]); try { repo.commit('按价格排序产品', 'Data Analyst', 'analyst@company.com'); } catch(e) {} refreshAll(); };
-
-	($("btn-checkout-prev") as HTMLButtonElement).onclick = () => {
-		if (!repo) return;
-		const history = repo.getCommitHistory(10);
-		if (history.length >= 2) {
-			const oldCommit = history[history.length - 2];
-			try { repo.checkout(oldCommit.hash); } catch(e) {}
+			// 暂存变更（不提交）
+			try {
+				repo.addCellChange('default', row, col, next);
+			} catch (err) {
+				console.warn(err);
+			}
 			refreshAll();
-		}
-	};
+		});
+	}
+
+	// 提交变更按钮
+	const btnCommit = document.getElementById('btn-commit') as HTMLButtonElement | null;
+	if (btnCommit) {
+		btnCommit.onclick = () => {
+			if (!repo) return;
+			const message = (document.getElementById('commit-message') as HTMLInputElement)?.value?.trim() || 'update';
+			const author = (document.getElementById('commit-author') as HTMLInputElement)?.value?.trim() || 'User';
+			const email = (document.getElementById('commit-email') as HTMLInputElement)?.value?.trim() || 'user@example.com';
+			try {
+				repo.commit(message, author, email);
+			} catch (e: any) {
+				alert(e?.message || String(e));
+			}
+			refreshAll();
+		};
+	}
+
+	// 插入列（暂存，不提交）
+	const btnInsertCol = document.getElementById('btn-insert-col') as HTMLButtonElement | null;
+	if (btnInsertCol) {
+		btnInsertCol.onclick = () => {
+			if (!repo) return;
+			// 依据当前结构下一个序号作为 order
+			const tree = repo.getWorkingTree();
+			const order = tree ? tree.structure.getColumnIds().length : 0;
+			const colId = `col_${generateId('')}`;
+			const col = createColumn(colId, { order });
+			try {
+				repo.addColumn('default', col); // 暂存结构变更
+			} catch (e) { console.warn(e); }
+
+			// 为新列追加占位单元格，让可视矩阵立即扩展
+			const adapter = new TableDataAdapter(repo);
+			const data = adapter.build();
+			const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
+			const newColIndex = hasBounds ? (data.maxCol + 1) : 0;
+			for (let r = hasBounds ? data.minRow : 0; r <= (hasBounds ? data.maxRow : 0); r++) {
+				try { repo.addCellChange('default', r, newColIndex, ''); } catch {}
+			}
+			refreshAll();
+		};
+	}
+
+	// 插入行（暂存，不提交）
+	const btnInsertRow = document.getElementById('btn-insert-row') as HTMLButtonElement | null;
+	if (btnInsertRow) {
+		btnInsertRow.onclick = () => {
+			if (!repo) return;
+			const tree = repo.getWorkingTree();
+			const order = tree ? tree.structure.getRowIds().length : 0;
+			const row = createRow({ order });
+			try {
+				repo.addRow('default', row); // 暂存结构变更
+			} catch (e) { console.warn(e); }
+
+			// 为新行追加占位单元格，让可视矩阵立即扩展
+			const adapter = new TableDataAdapter(repo);
+			const data = adapter.build();
+			const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
+			const newRowIndex = hasBounds ? (data.maxRow + 1) : 0;
+			for (let c = hasBounds ? data.minCol : 0; c <= (hasBounds ? data.maxCol : 0); c++) {
+				try { repo.addCellChange('default', newRowIndex, c, ''); } catch {}
+			}
+			refreshAll();
+		};
+	}
 }
 
 function main() {

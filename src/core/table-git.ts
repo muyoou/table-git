@@ -73,9 +73,19 @@ export class TableGit {
   ): void {
     const cell = new CellObject(row, column, value, formula, format);
     const changeKey = `${sheetName}:cell:${row},${column}`;
-    
+    // 判定新增或更新：
+    // 1) 若当前工作区不存在该单元格，则视为新增
+    // 2) 若暂存区已有此位置的新增或删除记录，继续视为新增（覆盖内容）
+    // 3) 其他情况视为更新
+    const baseSheet = this.workingTree.get(sheetName);
+    const baseHas = !!baseSheet?.getCellHash(row, column);
+    const staged = this.index.get(changeKey);
+    const type = (!baseHas || staged?.type === ChangeType.CELL_ADD || staged?.type === ChangeType.CELL_DELETE)
+      ? ChangeType.CELL_ADD
+      : ChangeType.CELL_UPDATE;
+
     this.index.set(changeKey, {
-      type: ChangeType.CELL_UPDATE,
+      type,
       sheetName,
       details: cell,
       timestamp: Date.now()
@@ -525,6 +535,20 @@ export class TableGit {
    */
   getWorkingTree(): SheetTree | undefined {
     return this.workingTree.get('default');
+  }
+
+  /**
+   * 获取预览用的工作区树
+   * - includeStaged=true 时，返回在当前工作区基础上应用暂存区变更后的临时树（不提交）
+   * - 否则，返回当前工作区的克隆
+   */
+  getPreviewTree(options?: { includeStaged?: boolean }): SheetTree | undefined {
+    if (options?.includeStaged) {
+      // 基于当前工作区 + 暂存区构建一棵临时树
+      return this.buildTreeFromIndex();
+    }
+    const sheet = this.getWorkingTree();
+    return sheet ? sheet.clone() : undefined;
   }
 
   /**

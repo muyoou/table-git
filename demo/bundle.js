@@ -1092,8 +1092,12 @@ Date: ${date}`;
     addCellChange(sheetName, row, column, value, formula, format) {
       const cell = new CellObject(row, column, value, formula, format);
       const changeKey = `${sheetName}:cell:${row},${column}`;
+      const baseSheet = this.workingTree.get(sheetName);
+      const baseHas = !!baseSheet?.getCellHash(row, column);
+      const staged = this.index.get(changeKey);
+      const type = !baseHas || staged?.type === "cell_add" /* CELL_ADD */ || staged?.type === "cell_delete" /* CELL_DELETE */ ? "cell_add" /* CELL_ADD */ : "cell_update" /* CELL_UPDATE */;
       this.index.set(changeKey, {
-        type: "cell_update" /* CELL_UPDATE */,
+        type,
         sheetName,
         details: cell,
         timestamp: Date.now()
@@ -1453,6 +1457,18 @@ Date: ${date}`;
       return this.workingTree.get("default");
     }
     /**
+     * 获取预览用的工作区树
+     * - includeStaged=true 时，返回在当前工作区基础上应用暂存区变更后的临时树（不提交）
+     * - 否则，返回当前工作区的克隆
+     */
+    getPreviewTree(options) {
+      if (options?.includeStaged) {
+        return this.buildTreeFromIndex();
+      }
+      const sheet = this.getWorkingTree();
+      return sheet ? sheet.clone() : void 0;
+    }
+    /**
      * 获取单元格值
      */
     getCellValue(row, col) {
@@ -1490,6 +1506,14 @@ Date: ${date}`;
       hidden: options.hidden || false,
       order: options.order || 0,
       constraints: options.constraints
+    };
+  }
+  function createRow(options = {}) {
+    return {
+      id: options.id || generateId("row_"),
+      height: options.height || 25,
+      hidden: options.hidden || false,
+      order: options.order || 0
     };
   }
   function createSampleTable() {
@@ -1550,7 +1574,7 @@ Date: ${date}`;
      * @param source 可选：从其他分支或指定提交预览（不需要 checkout）
      */
     build(source) {
-      const sheet = source ? this.repo.getTreeSnapshot(source) : this.repo.getWorkingTree();
+      const sheet = source ? this.repo.getTreeSnapshot(source) : this.repo.getPreviewTree({ includeStaged: true });
       if (!sheet) {
         return { header: [], rows: [], matrix: [], minRow: 0, minCol: 0, maxRow: -1, maxCol: -1 };
       }
@@ -1721,8 +1745,9 @@ Date: ${date}`;
     {
       const lines = branches.map((b) => {
         const label = `${b === current ? "\u2605 " : ""}${b}`;
-        const id = `preview-branch-${b}`;
-        return `<span>${escapeHtml2(label)}</span> <button data-preview-branch="${escapeHtml2(b)}" class="mini">\u9884\u89C8</button>`;
+        return `<span>${escapeHtml2(label)}</span>
+							<button data-preview-branch="${escapeHtml2(b)}" class="mini">\u9884\u89C8</button>
+							<button data-checkout-branch="${escapeHtml2(b)}" class="mini">\u5207\u6362</button>`;
       });
       const el = $("branches");
       if (el) {
@@ -1733,13 +1758,42 @@ Date: ${date}`;
             previewFrom({ branch }, `\u5206\u652F: ${branch}`);
           });
         });
+        el.querySelectorAll("button[data-checkout-branch]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            if (!repo) return;
+            const branch = btn.getAttribute("data-checkout-branch");
+            try {
+              repo.checkout(branch);
+            } catch (e) {
+              console.warn(e);
+            }
+            refreshAll();
+          });
+        });
       }
+    }
+    {
+      const changes = repo.getStagedChanges();
+      const lines = changes.map((ch) => {
+        const when = new Date(ch.timestamp).toLocaleTimeString();
+        let label = String(ch.type);
+        if (ch.type === "cell_add" /* CELL_ADD */ || ch.type === "cell_update" /* CELL_UPDATE */ || ch.type === "cell_delete" /* CELL_DELETE */) {
+          const d = ch.details;
+          const pos = d && typeof d.row === "number" && typeof d.column === "number" ? ` (${d.row},${d.column})` : "";
+          const val = d && "value" in d ? ` = ${String(d.value ?? "")}` : "";
+          label = `${ch.type}${pos}${val}`;
+        }
+        return `${label} @${ch.sheetName} ${when}`;
+      });
+      renderList("staged", lines.length ? lines : ["(\u7A7A)"]);
     }
     const hist = repo.getCommitHistory(10);
     {
       const lines = hist.map((c) => {
         const label = `${c.getShortHash()} - ${c.message}`;
-        return `<span>${escapeHtml2(label)}</span> <button data-preview-commit="${escapeHtml2(c.hash)}" class="mini">\u9884\u89C8</button>`;
+        return `<span>${escapeHtml2(label)}</span>
+							<button data-preview-commit="${escapeHtml2(c.hash)}" class="mini">\u9884\u89C8</button>
+							<button data-checkout-commit="${escapeHtml2(c.hash)}" class="mini">\u5207\u6362</button>`;
       });
       const el = $("history");
       if (el) {
@@ -1748,6 +1802,18 @@ Date: ${date}`;
           btn.addEventListener("click", () => {
             const commit = btn.getAttribute("data-preview-commit");
             previewFrom({ commit }, `\u63D0\u4EA4: ${commit.substring(0, 7)}`);
+          });
+        });
+        el.querySelectorAll("button[data-checkout-commit]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            if (!repo) return;
+            const commit = btn.getAttribute("data-checkout-commit");
+            try {
+              repo.checkout(commit);
+            } catch (e) {
+              console.warn(e);
+            }
+            refreshAll();
           });
         });
       }
@@ -1765,16 +1831,27 @@ Date: ${date}`;
     const adapter = new TableDataAdapter(repo);
     const data = adapter.build();
     const rows = data.matrix;
-    const html = [`<table>`];
-    if (data.header.length) {
+    const hasHeader = data.header.length > 0;
+    const html = ["<table>"];
+    if (hasHeader && rows.length) {
       html.push("<thead><tr>");
-      html.push(...data.header.map((h) => `<th>${h ?? ""}</th>`));
+      for (let c = 0; c < rows[0].length; c++) {
+        const rowIdx = data.minRow + 0;
+        const colIdx = data.minCol + c;
+        const val = rows[0]?.[c] ?? "";
+        html.push(`<th>${val ?? ""} <button class="mini" data-edit-row="${rowIdx}" data-edit-col="${colIdx}">\u4FEE\u6539</button></th>`);
+      }
       html.push("</tr></thead>");
     }
     html.push("<tbody>");
-    for (const row of data.header.length ? data.rows : rows) {
+    for (let r = hasHeader ? 1 : 0; r < rows.length; r++) {
       html.push("<tr>");
-      html.push(...(row ?? []).map((cell) => `<td>${cell ?? ""}</td>`));
+      for (let c = 0; c < rows[r].length; c++) {
+        const rowIdx = data.minRow + r;
+        const colIdx = data.minCol + c;
+        const val = rows[r]?.[c] ?? "";
+        html.push(`<td>${val ?? ""} <button class="mini" data-edit-row="${rowIdx}" data-edit-col="${colIdx}">\u4FEE\u6539</button></td>`);
+      }
       html.push("</tr>");
     }
     html.push("</tbody></table>");
@@ -1835,108 +1912,102 @@ Date: ${date}`;
       repo = createSampleTable();
       refreshAll();
     };
-    $("btn-commit").onclick = () => {
-      if (!repo) return;
-      const author = document.getElementById("author").value || "Demo User";
-      const email = document.getElementById("email").value || "demo@example.com";
-      const message = document.getElementById("message").value || "\u6F14\u793A\u63D0\u4EA4";
-      try {
-        repo.commit(message, author, email);
-      } catch (e) {
-        console.warn(e);
-      }
-      refreshAll();
-    };
     $("btn-create-branch").onclick = () => {
       if (!repo) return;
       const b = document.getElementById("branch").value || "temp";
       repo.createBranch(b);
       refreshAll();
     };
-    $("btn-checkout").onclick = () => {
-      if (!repo) return;
-      const b = document.getElementById("branch").value || "main";
-      try {
-        repo.checkout(b);
-      } catch (e) {
-        console.warn(e);
-      }
-      refreshAll();
-    };
-    $("btn-back-main").onclick = () => {
-      if (!repo) return;
-      try {
-        repo.checkout("main");
-      } catch (e) {
-        console.warn(e);
-      }
-      refreshAll();
-    };
-    $("btn-adjust").onclick = () => {
-      if (!repo) return;
-      repo.addCellChange("default", 1, 2, 6999);
-      repo.addCellChange("default", 2, 2, 13999);
-      try {
-        repo.commit("\u8C03\u6574\u4EA7\u54C1\u4EF7\u683C", "Sales Manager", "sales@company.com");
-      } catch (e) {
-      }
-      refreshAll();
-    };
-    $("btn-delete-row").onclick = () => {
-      if (!repo) return;
-      repo.addRow("default", { id: "row_2", height: 25, hidden: false, order: 1 });
-      try {
-        repo.commit("\u6DFB\u52A0\u884C\u5143\u6570\u636E", "Data Manager", "data@company.com");
-      } catch (e) {
-      }
-      repo.deleteCellChange("default", 2, 1);
-      repo.deleteCellChange("default", 2, 2);
-      repo.deleteCellChange("default", 2, 3);
-      repo.deleteCellChange("default", 2, 4);
-      repo.deleteRow("default", "row_2");
-      try {
-        repo.commit("\u5220\u9664MacBook Pro\u4EA7\u54C1\u884C", "Product Manager", "pm@company.com");
-      } catch (e) {
-      }
-      refreshAll();
-    };
-    $("btn-add-more").onclick = () => {
-      if (!repo) return;
-      repo.addCellChange("default", 4, 1, "Apple Watch");
-      repo.addCellChange("default", 4, 2, 2999);
-      repo.addCellChange("default", 4, 3, 200);
-      repo.addCellChange("default", 4, 4, "\u667A\u80FD\u624B\u8868");
-      repo.addCellChange("default", 5, 1, "AirPods Pro");
-      repo.addCellChange("default", 5, 2, 1999);
-      repo.addCellChange("default", 5, 3, 150);
-      repo.addCellChange("default", 5, 4, "\u65E0\u7EBF\u8033\u673A");
-      try {
-        repo.commit("\u6DFB\u52A0\u66F4\u591A\u4EA7\u54C1", "Product Manager", "pm@company.com");
-      } catch (e) {
-      }
-      refreshAll();
-    };
-    $("btn-sort").onclick = () => {
-      if (!repo) return;
-      repo.sortRows("default", [{ columnId: "col_2", ascending: true }]);
-      try {
-        repo.commit("\u6309\u4EF7\u683C\u6392\u5E8F\u4EA7\u54C1", "Data Analyst", "analyst@company.com");
-      } catch (e) {
-      }
-      refreshAll();
-    };
-    $("btn-checkout-prev").onclick = () => {
-      if (!repo) return;
-      const history = repo.getCommitHistory(10);
-      if (history.length >= 2) {
-        const oldCommit = history[history.length - 2];
+    const grid = document.getElementById("grid");
+    if (grid) {
+      grid.addEventListener("click", (e) => {
+        const target = e.target;
+        if (!target) return;
+        const btn = target.closest("button[data-edit-row][data-edit-col]");
+        if (!btn) return;
+        if (!repo) return;
+        const rowStr = btn.getAttribute("data-edit-row");
+        const colStr = btn.getAttribute("data-edit-col");
+        if (!rowStr || !colStr) return;
+        const row = parseInt(rowStr, 10);
+        const col = parseInt(colStr, 10);
+        const currentVal = repo.getCellValue(row, col);
+        const next = window.prompt(`\u4FEE\u6539\u5355\u5143\u683C (${row}, ${col}) \u7684\u503C\uFF1A`, currentVal != null ? String(currentVal) : "");
+        if (next === null) return;
         try {
-          repo.checkout(oldCommit.hash);
-        } catch (e) {
+          repo.addCellChange("default", row, col, next);
+        } catch (err) {
+          console.warn(err);
         }
         refreshAll();
-      }
-    };
+      });
+    }
+    const btnCommit = document.getElementById("btn-commit");
+    if (btnCommit) {
+      btnCommit.onclick = () => {
+        if (!repo) return;
+        const message = document.getElementById("commit-message")?.value?.trim() || "update";
+        const author = document.getElementById("commit-author")?.value?.trim() || "User";
+        const email = document.getElementById("commit-email")?.value?.trim() || "user@example.com";
+        try {
+          repo.commit(message, author, email);
+        } catch (e) {
+          alert(e?.message || String(e));
+        }
+        refreshAll();
+      };
+    }
+    const btnInsertCol = document.getElementById("btn-insert-col");
+    if (btnInsertCol) {
+      btnInsertCol.onclick = () => {
+        if (!repo) return;
+        const tree = repo.getWorkingTree();
+        const order = tree ? tree.structure.getColumnIds().length : 0;
+        const colId = `col_${generateId("")}`;
+        const col = createColumn(colId, { order });
+        try {
+          repo.addColumn("default", col);
+        } catch (e) {
+          console.warn(e);
+        }
+        const adapter = new TableDataAdapter(repo);
+        const data = adapter.build();
+        const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
+        const newColIndex = hasBounds ? data.maxCol + 1 : 0;
+        for (let r = hasBounds ? data.minRow : 0; r <= (hasBounds ? data.maxRow : 0); r++) {
+          try {
+            repo.addCellChange("default", r, newColIndex, "");
+          } catch {
+          }
+        }
+        refreshAll();
+      };
+    }
+    const btnInsertRow = document.getElementById("btn-insert-row");
+    if (btnInsertRow) {
+      btnInsertRow.onclick = () => {
+        if (!repo) return;
+        const tree = repo.getWorkingTree();
+        const order = tree ? tree.structure.getRowIds().length : 0;
+        const row = createRow({ order });
+        try {
+          repo.addRow("default", row);
+        } catch (e) {
+          console.warn(e);
+        }
+        const adapter = new TableDataAdapter(repo);
+        const data = adapter.build();
+        const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
+        const newRowIndex = hasBounds ? data.maxRow + 1 : 0;
+        for (let c = hasBounds ? data.minCol : 0; c <= (hasBounds ? data.maxCol : 0); c++) {
+          try {
+            repo.addCellChange("default", newRowIndex, c, "");
+          } catch {
+          }
+        }
+        refreshAll();
+      };
+    }
   }
   function main() {
     bindTabs();
