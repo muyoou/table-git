@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+import sha1 from 'js-sha1';
 
 /**
  * 计算对象的SHA1哈希值
@@ -7,7 +7,7 @@ import * as crypto from 'crypto';
  */
 export function calculateHash(obj: any): string {
   const content = JSON.stringify(obj, Object.keys(obj).sort());
-  return crypto.createHash('sha1').update(content).digest('hex');
+  return sha1(content);
 }
 
 /**

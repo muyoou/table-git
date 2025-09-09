@@ -3,48 +3,91 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Table-Git 格式化器预览</title>
+    <title>Table-Git 交互式演示</title>
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", sans-serif; margin: 24px; }
-      h1 { margin: 0 0 12px; font-size: 20px; }
-      .tabs { display: flex; gap: 8px; margin: 12px 0; }
-      .tabs button { padding: 6px 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; border-radius: 6px; }
-      .tabs button.active { background: #0b5cff; color: #fff; border-color: #0b5cff; }
-      .panel { display: none; }
-      .panel.active { display: block; }
-      pre { padding: 12px; background: #f7f7f7; overflow: auto; border-radius: 8px; border: 1px solid #eee; }
-      iframe { width: 100%; height: 380px; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
-      .hint { color: #666; font-size: 12px; }
-      .links { margin: 8px 0 16px; }
-      .links a { margin-right: 12px; }
+      :root{--bg:#fff;--muted:#666;--bd:#ddd;--pri:#0b5cff}
+      *{box-sizing:border-box}
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,"Noto Sans",sans-serif;margin:24px;background:var(--bg)}
+      h1{margin:0 0 12px;font-size:22px}
+      h2{font-size:16px;margin:16px 0 8px}
+      .row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+      .card{border:1px solid var(--bd);border-radius:10px;padding:12px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+      .controls{display:flex;gap:8px;flex-wrap:wrap}
+      button{padding:6px 10px;border:1px solid var(--bd);background:#fff;border-radius:8px;cursor:pointer}
+      button.primary{background:var(--pri);color:#fff;border-color:var(--pri)}
+      input,select{padding:6px 8px;border:1px solid var(--bd);border-radius:8px}
+      .grid{border:1px solid var(--bd);border-radius:8px;overflow:auto;max-height:320px}
+      table{border-collapse:collapse;width:100%}
+      th,td{border:1px solid var(--bd);padding:6px 8px;text-align:left}
+  .cols{font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial; font-size:13px}
+  .cols ul{margin:6px 0 0 18px; padding:0}
+  .cols li{margin:2px 0}
+      .muted{color:var(--muted)}
+      .tabs{display:flex;gap:8px;margin-bottom:8px}
+      .tabs button.active{background:var(--pri);color:#fff;border-color:var(--pri)}
+      pre{padding:10px;background:#f7f7f7;border:1px solid #eee;border-radius:8px;overflow:auto;max-height:340px}
+      iframe{width:100%;height:320px;border:1px solid var(--bd);border-radius:8px;background:#fff}
+      .col{flex:1;min-width:320px}
     </style>
   </head>
   <body>
-    <h1>Table-Git 格式化器预览（HTML / CSV / JSON）</h1>
-    <div class="hint">请先执行构建脚本生成 table.html / data.csv / data.json，然后使用下方标签切换预览。</div>
+    <h1>Table-Git 交互式演示</h1>
+    <div class="row">
+      <div class="card col">
+        <h2>操作</h2>
+        <div class="controls">
+          <button id="btn-init" class="primary">初始化示例数据</button>
+          <input id="author" placeholder="作者" value="Demo User" />
+          <input id="email" placeholder="邮箱" value="demo@example.com" />
+          <input id="message" class="wide" placeholder="提交信息" value="演示提交" />
+          <button id="btn-commit">提交</button>
+        </div>
+        <div class="controls">
+          <input id="branch" placeholder="分支名" value="price-update" />
+          <button id="btn-create-branch">创建分支</button>
+          <button id="btn-checkout">切换分支</button>
+          <button id="btn-back-main">切换回 main</button>
+        </div>
+        <div class="controls">
+          <button id="btn-adjust">调整价格</button>
+          <button id="btn-delete-row">删除第2行</button>
+          <button id="btn-add-more">添加更多产品</button>
+          <button id="btn-sort">按价格排序</button>
+        </div>
+        <div class="controls">
+          <button id="btn-checkout-prev">切到倒数第二个提交</button>
+        </div>
+        <div class="muted" id="status"></div>
+      </div>
 
-    <div class="tabs">
-      <button data-tab="html" class="active">HTML</button>
-      <button data-tab="csv">CSV</button>
-      <button data-tab="json">JSON</button>
+      <div class="card col">
+        <h2>列结构</h2>
+        <div id="columns" class="cols">(初始化后显示)</div>
+        <h2>分支</h2>
+        <div id="branches" class="cols">(初始化后显示)</div>
+        <h2>提交历史</h2>
+        <div id="history" class="cols">(初始化后显示)</div>
+      </div>
     </div>
 
-    <div class="links">
-      <a href="table.html" target="_blank">打开 table.html</a>
-      <a href="data.csv" target="_blank">打开 data.csv</a>
-      <a href="data.json" target="_blank">打开 data.json</a>
+    <div class="row" style="margin-top:16px">
+      <div class="card col">
+        <h2>表格数据</h2>
+        <div id="grid" class="grid"></div>
+      </div>
+      <div class="card col">
+        <h2>格式化预览</h2>
+        <div class="tabs">
+          <button data-tab="html" class="active">HTML</button>
+          <button data-tab="csv">CSV</button>
+          <button data-tab="json">JSON</button>
+        </div>
+        <section id="panel-html" class="panel" style="display:block"><iframe id="htmlFrame"></iframe></section>
+        <section id="panel-csv" class="panel" style="display:none"><pre id="csvOut"></pre></section>
+        <section id="panel-json" class="panel" style="display:none"><pre id="jsonOut"></pre></section>
+      </div>
     </div>
 
-    <section id="panel-html" class="panel active">
-      <iframe id="htmlFrame" src="table.html"></iframe>
-    </section>
-    <section id="panel-csv" class="panel">
-      <pre id="csv-output">(等待生成 data.csv ...)</pre>
-    </section>
-    <section id="panel-json" class="panel">
-      <pre id="json-output">(等待生成 data.json ...)</pre>
-    </section>
-
-    <script src="loader.js"></script>
+    <script src="bundle.js"></script>
   </body>
   </html>
