@@ -28,3 +28,9 @@ export {
   createRow,
   createSampleTable
 } from './utils/factory';
+
+// 格式化器（函数式）导出
+export type { TableData, FormatterFunction } from './formatters/types';
+export { TableDataAdapter } from './formatters/adapter';
+export { FunctionFormatter, FormatterRegistry } from './formatters/function-formatter';
+export { csvFormatter, jsonFormatter, htmlFormatter } from './formatters/builtin';

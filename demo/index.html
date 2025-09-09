@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Table-Git 格式化器预览</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", sans-serif; margin: 24px; }
+      h1 { margin: 0 0 12px; font-size: 20px; }
+      .tabs { display: flex; gap: 8px; margin: 12px 0; }
+      .tabs button { padding: 6px 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; border-radius: 6px; }
+      .tabs button.active { background: #0b5cff; color: #fff; border-color: #0b5cff; }
+      .panel { display: none; }
+      .panel.active { display: block; }
+      pre { padding: 12px; background: #f7f7f7; overflow: auto; border-radius: 8px; border: 1px solid #eee; }
+      iframe { width: 100%; height: 380px; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
+      .hint { color: #666; font-size: 12px; }
+      .links { margin: 8px 0 16px; }
+      .links a { margin-right: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Table-Git 格式化器预览（HTML / CSV / JSON）</h1>
+    <div class="hint">请先执行构建脚本生成 table.html / data.csv / data.json，然后使用下方标签切换预览。</div>
+
+    <div class="tabs">
+      <button data-tab="html" class="active">HTML</button>
+      <button data-tab="csv">CSV</button>
+      <button data-tab="json">JSON</button>
+    </div>
+
+    <div class="links">
+      <a href="table.html" target="_blank">打开 table.html</a>
+      <a href="data.csv" target="_blank">打开 data.csv</a>
+      <a href="data.json" target="_blank">打开 data.json</a>
+    </div>
+
+    <section id="panel-html" class="panel active">
+      <iframe id="htmlFrame" src="table.html"></iframe>
+    </section>
+    <section id="panel-csv" class="panel">
+      <pre id="csv-output">(等待生成 data.csv ...)</pre>
+    </section>
+    <section id="panel-json" class="panel">
+      <pre id="json-output">(等待生成 data.json ...)</pre>
+    </section>
+
+    <script src="loader.js"></script>
+  </body>
+  </html>
