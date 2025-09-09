@@ -7,8 +7,12 @@ import { parsePosition } from '../utils/hash';
 export class TableDataAdapter {
   constructor(private readonly repo: TableGit, private readonly sheetName: string = 'default') {}
 
-  build(): TableData {
-    const sheet: SheetTree | undefined = this.repo.getWorkingTree();
+  /**
+   * 构建统一数据
+   * @param source 可选：从其他分支或指定提交预览（不需要 checkout）
+   */
+  build(source?: { branch?: string; commit?: string }): TableData {
+    const sheet: SheetTree | undefined = source ? this.repo.getTreeSnapshot(source) : this.repo.getWorkingTree();
     if (!sheet) {
       return { header: [], rows: [], matrix: [], minRow: 0, minCol: 0, maxRow: -1, maxCol: -1 };
     }
@@ -30,8 +34,9 @@ export class TableDataAdapter {
         if (!hash) {
           row.push(undefined);
         } else {
-          // 使用 repo.getCell 取得值
-          const cell = this.repo.getCell(r, c);
+          // 直接通过对象存储还原值：由于 TableGit.getCell 读取的是当前工作区，
+          // 当我们做历史/分支预览时应从快照 tree 中反查 cell 对象。
+          const cell = this.repo.getCellFromTree(sheet, r, c);
           row.push(cell ? cell.value : undefined);
         }
       }

@@ -9,23 +9,29 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "start": "node dist/index.js",
-  "clean": "rimraf dist",
-  "demo:build": "npm run build && node demo/build-demo.js",
-  "demo:serve": "node demo/server.js",
-  "demo:bundle": "node -e \"process.env.NODE_PATH='demo';require('module').Module._initPaths();\" && node -e \"require('esbuild');\" || npm i esbuild -D && node demo/esbuild.config.js"
+    "clean": "rimraf dist",
+    "demo:build": "npm run build && node demo/build-demo.js",
+    "demo:serve": "node demo/server.js",
+    "demo:bundle": "node -e \"process.env.NODE_PATH='demo';require('module').Module._initPaths();\" && node -e \"require('esbuild');\" || npm i esbuild -D && node demo/esbuild.config.js"
   },
-  "keywords": ["version-control", "table", "git", "typescript"],
+  "keywords": [
+    "version-control",
+    "table",
+    "git",
+    "typescript"
+  ],
   "author": "Table Version Control Team",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^20.0.0",
     "@types/jest": "^29.0.0",
-    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.21.5",
     "jest": "^29.0.0",
+    "rimraf": "^5.0.0",
     "ts-jest": "^29.0.0",
-  "rimraf": "^5.0.0",
-  "esbuild": "^0.21.5"
+    "typescript": "^5.0.0"
   },
   "dependencies": {
+    "js-sha1": "^0.7.0"
   }
 }

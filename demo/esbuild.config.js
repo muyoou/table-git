@@ -47,5 +47,7 @@ esbuild.build({
 	platform: 'browser',
 	sourcemap: true,
 		plugins: [aliasCrypto(), defineSha1()],
+	loader: { '.ts': 'ts' },
+	tsconfig: 'tsconfig.json',
 }).catch(() => process.exit(1));
 

@@ -7,7 +7,7 @@ import {
 	csvFormatter,
 	jsonFormatter,
 	htmlFormatter,
-} from '../dist/index.js';
+} from '../src/index.ts';
 
 type El = HTMLElement | null;
 const $ = (id: string) => document.getElementById(id);
@@ -56,11 +56,45 @@ function refreshAll() {
 	// branches
 	const branches = repo.getBranches();
 	const current = repo.getCurrentBranch();
-		renderList('branches', branches.map(b => `${b === current ? '★ ' : ''}${b}`));
+			// 分支列表：附带预览按钮
+			{
+				const lines = branches.map(b => {
+					const label = `${b === current ? '★ ' : ''}${b}`;
+					const id = `preview-branch-${b}`;
+					return `<span>${escapeHtml(label)}</span> <button data-preview-branch="${escapeHtml(b)}" class="mini">预览</button>`;
+				});
+				const el = $("branches");
+				if (el) {
+					setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
+					// 绑定事件
+					el.querySelectorAll('button[data-preview-branch]').forEach(btn => {
+						btn.addEventListener('click', () => {
+							const branch = (btn as HTMLButtonElement).getAttribute('data-preview-branch')!;
+							previewFrom({ branch }, `分支: ${branch}`);
+						});
+					});
+				}
+			}
 
 	// history
 	const hist = repo.getCommitHistory(10);
-		renderList('history', hist.map((c) => `${c.getShortHash()} - ${c.message}`));
+			// 历史提交：附带预览按钮
+			{
+				const lines = hist.map((c) => {
+					const label = `${c.getShortHash()} - ${c.message}`;
+					return `<span>${escapeHtml(label)}</span> <button data-preview-commit="${escapeHtml(c.hash)}" class="mini">预览</button>`;
+				});
+				const el = $("history");
+				if (el) {
+					setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
+					el.querySelectorAll('button[data-preview-commit]').forEach(btn => {
+						btn.addEventListener('click', () => {
+							const commit = (btn as HTMLButtonElement).getAttribute('data-preview-commit')!;
+							previewFrom({ commit }, `提交: ${commit.substring(0,7)}`);
+						});
+					});
+				}
+			}
 
 	// grid
 	renderGrid();
@@ -100,6 +134,7 @@ function refreshPreview() {
 	const html = registry.format('html', data, { includeHeader: true });
 	const csv = registry.format('csv', data, { includeHeader: true, quoteText: true });
 	const json = registry.format('json', data, { shape: 'rows', space: 2 });
+	setText($("previewFrom"), '预览来源：当前工作区');
 
 	// HTML -> iframe
 	const doc = (document.getElementById('htmlFrame') as HTMLIFrameElement).contentWindow?.document;
@@ -111,6 +146,23 @@ function refreshPreview() {
 	setText($("csvOut"), csv);
 	setText($("jsonOut"), json);
 }
+
+	// 基于分支/提交的临时预览（不影响当前工作区）
+	function previewFrom(source: { branch?: string; commit?: string }, label: string) {
+		if (!repo) return;
+			const adapter = new TableDataAdapter(repo);
+			const data = adapter.build(source);
+		const html = registry.format('html', data, { includeHeader: true });
+		const csv = registry.format('csv', data, { includeHeader: true, quoteText: true });
+		const json = registry.format('json', data, { shape: 'rows', space: 2 });
+
+		setText($("previewFrom"), `预览来源：${label}`);
+
+		const doc = (document.getElementById('htmlFrame') as HTMLIFrameElement).contentWindow?.document;
+		if (doc) { doc.open(); doc.write(`<!doctype html><meta charset='utf-8'><style>table{border-collapse:collapse}th,td{border:1px solid #ddd;padding:6px}</style>${html}`); doc.close(); }
+		setText($("csvOut"), csv);
+		setText($("jsonOut"), json);
+	}
 
 function bindTabs() {
 	const buttons = Array.from(document.querySelectorAll('.tabs button')) as HTMLButtonElement[];

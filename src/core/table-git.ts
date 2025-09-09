@@ -338,6 +338,37 @@ export class TableGit {
     return this.objects.get(hash);
   }
 
+  /**
+   * 获取指定引用（分支或提交）对应的工作表快照，而不改变当前工作区
+   */
+  getTreeSnapshot(ref?: { branch?: string; commit?: string }): SheetTree | undefined {
+    let commitHash: string | undefined;
+    if (ref?.commit) {
+      commitHash = ref.commit;
+    } else if (ref?.branch) {
+      commitHash = this.refs.get(ref.branch);
+    } else {
+      // 默认为当前 HEAD
+      commitHash = this.refs.get(this.head) || (this.isDetachedHead() ? this.head : undefined);
+    }
+
+    if (!commitHash) return undefined;
+
+    const commit = this.getObject(commitHash) as CommitObject | undefined;
+    if (!commit) return undefined;
+    const tree = this.getObject(commit.tree) as SheetTree | undefined;
+    return tree ? tree.clone() : undefined;
+  }
+
+  /**
+   * 从指定的 SheetTree 快照读取单元格对象
+   */
+  getCellFromTree(tree: SheetTree, row: number, col: number): CellObject | undefined {
+    const hash = tree.getCellHash(row, col);
+    if (!hash) return undefined;
+    return this.getObject(hash) as CellObject;
+  }
+
   // ========== 分支操作 ==========
 
   /**
