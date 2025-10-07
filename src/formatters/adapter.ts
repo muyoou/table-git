@@ -1,7 +1,5 @@
 import { TableGit } from '../core/table-git';
-import { SheetTree } from '../core/sheet';
 import { TableData } from './types';
-import { parsePosition } from '../utils/hash';
 
 // 将仓库当前工作区的数据转换成统一的 TableData
 export class TableDataAdapter {
@@ -12,9 +10,9 @@ export class TableDataAdapter {
    * @param source 可选：从其他分支或指定提交预览（不需要 checkout）
    */
   build(source?: { branch?: string; commit?: string }): TableData {
-    const sheet: SheetTree | undefined = source
-      ? this.repo.getTreeSnapshot(source)
-      : this.repo.getPreviewTree({ includeStaged: true });
+    const sheet = source
+      ? this.repo.getSheetSnapshot(this.sheetName, source)
+      : this.repo.getPreviewSheet(this.sheetName, { includeStaged: true });
     if (!sheet) {
       return { header: [], rows: [], matrix: [], minRow: 0, minCol: 0, maxRow: -1, maxCol: -1 };
     }

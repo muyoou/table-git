@@ -199,6 +199,14 @@ export class SheetTree {
   }
 
   /**
+   * 重命名工作表
+   */
+  rename(newName: string): void {
+    this.name = newName;
+    this.updateHash();
+  }
+
+  /**
    * 转换为JSON
    */
   toJSON(): any {

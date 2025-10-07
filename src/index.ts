@@ -2,6 +2,7 @@
 export { CellObject } from './core/cell';
 export { TableStructure } from './core/structure';
 export { SheetTree } from './core/sheet';
+export { TableTree } from './core/table-tree';
 export { CommitObject } from './core/commit';
 export { TableGit } from './core/table-git';
 export { DiffMergeEngine } from './core/diff-merge';

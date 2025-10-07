@@ -1,12 +1,44 @@
 import sha1 from 'js-sha1';
 
+function normalize(value: any): any {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => normalize(item));
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === 'object') {
+    if (value instanceof Map) {
+      const entries = Array.from(value.entries()).map(([key, val]) => [key, normalize(val)]);
+      entries.sort(([a], [b]) => (a > b ? 1 : a < b ? -1 : 0));
+      return entries;
+    }
+
+    const sortedKeys = Object.keys(value).sort();
+    const result: Record<string, any> = {};
+    for (const key of sortedKeys) {
+      result[key] = normalize(value[key]);
+    }
+    return result;
+  }
+
+  return value;
+}
+
 /**
  * 计算对象的SHA1哈希值
  * @param obj 要计算哈希的对象
  * @returns SHA1哈希字符串
  */
 export function calculateHash(obj: any): string {
-  const content = JSON.stringify(obj, Object.keys(obj).sort());
+  const normalized = normalize(obj);
+  const content = JSON.stringify(normalized);
   return sha1(content);
 }
 
@@ -37,8 +69,7 @@ export function deepClone<T>(obj: T): T {
  * @returns 是否相等
  */
 export function deepEqual(obj1: any, obj2: any): boolean {
-  return JSON.stringify(obj1, Object.keys(obj1).sort()) === 
-         JSON.stringify(obj2, Object.keys(obj2).sort());
+  return JSON.stringify(normalize(obj1)) === JSON.stringify(normalize(obj2));
 }
 
 /**

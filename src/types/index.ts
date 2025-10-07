@@ -63,6 +63,11 @@ export interface RowMetadata {
  * 变更类型枚举
  */
 export enum ChangeType {
+  SHEET_ADD = 'sheet_add',
+  SHEET_DELETE = 'sheet_delete',
+  SHEET_RENAME = 'sheet_rename',
+  SHEET_MOVE = 'sheet_move',
+  SHEET_DUPLICATE = 'sheet_duplicate',
   CELL_ADD = 'cell_add',
   CELL_UPDATE = 'cell_update',
   CELL_DELETE = 'cell_delete',
@@ -86,10 +91,30 @@ export interface Change {
   timestamp: number;
 }
 
+export interface SheetAddDetails {
+  order?: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface SheetRenameDetails {
+  newName: string;
+}
+
+export interface SheetMoveDetails {
+  newIndex: number;
+}
+
+export interface SheetDuplicateDetails {
+  sourceSheet: string;
+  newName: string;
+  order?: number;
+  meta?: Record<string, unknown>;
+}
+
 /**
  * 差异结果接口
  */
-export interface DiffResult {
+export interface SheetDiffResult {
   cellChanges: {
     added: any[];
     modified: { old: any; new: any }[];
@@ -111,10 +136,20 @@ export interface DiffResult {
   };
 }
 
+export interface DiffResult {
+  sheetChanges: {
+    added: string[];
+    deleted: string[];
+    moved: { name: string; oldIndex: number; newIndex: number }[];
+  };
+  sheets: Record<string, SheetDiffResult>;
+}
+
 /**
  * 冲突类型接口
  */
 export interface CellConflict {
+  sheetName?: string;
   position: string;
   base?: any;
   current?: any;
@@ -124,6 +159,7 @@ export interface CellConflict {
 export interface StructureConflict {
   type: 'column' | 'row';
   id: string;
+  sheetName?: string;
   base?: ColumnMetadata;
   current?: ColumnMetadata;
   target?: ColumnMetadata;

@@ -1,5 +1,6 @@
 import { TableGit } from '../src/core/table-git';
-import { createTableGit, createColumn, createCell } from '../src/index';
+import { DiffMergeEngine } from '../src/core/diff-merge';
+import { createTableGit, createColumn } from '../src/index';
 
 describe('TableGit 基础功能测试', () => {
   let repo: TableGit;
@@ -15,8 +16,8 @@ describe('TableGit 基础功能测试', () => {
 
   test('应该能够添加和提交单元格变更', () => {
     // 添加单元格
-    repo.addCellChange('Sheet1', 1, 1, 'Hello');
-    repo.addCellChange('Sheet1', 1, 2, 'World');
+  repo.addCellChange('default', 1, 1, 'Hello');
+  repo.addCellChange('default', 1, 2, 'World');
     
     // 检查暂存区
     expect(repo.getStagedChanges()).toHaveLength(2);
@@ -34,7 +35,7 @@ describe('TableGit 基础功能测试', () => {
       constraints: { required: true }
     });
     
-    repo.addColumn('Sheet1', column);
+  repo.addColumn('default', column);
     repo.commit('添加列', 'Test User', 'test@example.com');
     
     const workingTree = repo.getWorkingTree();
@@ -43,7 +44,7 @@ describe('TableGit 基础功能测试', () => {
 
   test('应该能够创建和切换分支', () => {
     // 先添加一些数据
-    repo.addCellChange('Sheet1', 1, 1, 'Original');
+  repo.addCellChange('default', 1, 1, 'Original');
     repo.commit('初始提交', 'Test User', 'test@example.com');
     
     // 创建分支
@@ -55,7 +56,7 @@ describe('TableGit 基础功能测试', () => {
   });
 
   test('应该能够获取单元格值', () => {
-    repo.addCellChange('Sheet1', 1, 1, 'Test Value');
+  repo.addCellChange('default', 1, 1, 'Test Value');
     repo.commit('添加测试值', 'Test User', 'test@example.com');
     
     const value = repo.getCellValue(1, 1);
@@ -64,11 +65,11 @@ describe('TableGit 基础功能测试', () => {
 
   test('应该能够删除单元格', () => {
     // 先添加单元格
-    repo.addCellChange('Sheet1', 1, 1, 'To Delete');
+  repo.addCellChange('default', 1, 1, 'To Delete');
     repo.commit('添加要删除的单元格', 'Test User', 'test@example.com');
     
     // 删除单元格
-    repo.deleteCellChange('Sheet1', 1, 1);
+  repo.deleteCellChange('default', 1, 1);
     repo.commit('删除单元格', 'Test User', 'test@example.com');
     
     const value = repo.getCellValue(1, 1);
@@ -76,10 +77,10 @@ describe('TableGit 基础功能测试', () => {
   });
 
   test('应该能够获取提交历史', () => {
-    repo.addCellChange('Sheet1', 1, 1, 'First');
+  repo.addCellChange('default', 1, 1, 'First');
     repo.commit('第一次提交', 'Test User', 'test@example.com');
     
-    repo.addCellChange('Sheet1', 1, 2, 'Second');
+  repo.addCellChange('default', 1, 2, 'Second');
     repo.commit('第二次提交', 'Test User', 'test@example.com');
     
     const history = repo.getCommitHistory();
@@ -89,7 +90,7 @@ describe('TableGit 基础功能测试', () => {
   });
 
   test('应该能够重置暂存区', () => {
-    repo.addCellChange('Sheet1', 1, 1, 'Staged');
+  repo.addCellChange('default', 1, 1, 'Staged');
     expect(repo.getStagedChanges()).toHaveLength(1);
     
     repo.reset();
@@ -98,16 +99,19 @@ describe('TableGit 基础功能测试', () => {
 
   test('应该能够checkout到指定的提交历史', () => {
     // 创建第一个提交
-    repo.addCellChange('Sheet1', 1, 1, 'Version 1');
-    const commit1 = repo.commit('第一版本', 'Test User', 'test@example.com');
+  repo.addCellChange('default', 1, 1, 'Version 1');
+  const commit1 = repo.commit('第一版本', 'Test User', 'test@example.com');
+  const version1CellHash = repo.getCell(1, 1)?.hash;
     
     // 创建第二个提交
-    repo.addCellChange('Sheet1', 1, 1, 'Version 2');
-    repo.addCellChange('Sheet1', 1, 2, 'New Data');
+  repo.addCellChange('default', 1, 1, 'Version 2');
+  repo.addCellChange('default', 1, 2, 'New Data');
     const commit2 = repo.commit('第二版本', 'Test User', 'test@example.com');
+  const version2CellHash = repo.getCell(1, 1)?.hash;
+  expect(version2CellHash).not.toBe(version1CellHash);
     
     // 创建第三个提交
-    repo.addCellChange('Sheet1', 2, 1, 'More Data');
+  repo.addCellChange('default', 2, 1, 'More Data');
     const commit3 = repo.commit('第三版本', 'Test User', 'test@example.com');
     
     // 验证当前状态
@@ -119,6 +123,10 @@ describe('TableGit 基础功能测试', () => {
     repo.checkout(commit1);
     expect(repo.isDetachedHead()).toBe(true);
     expect(repo.getCurrentCommitHash()).toBe(commit1);
+    const commit1Sheet = repo.getSheetSnapshot('default', { commit: commit1 });
+    expect(commit1Sheet?.getCellHash(1, 1)).toBe(version1CellHash);
+    const workingSheetAfterCheckout = repo.getWorkingSheet('default');
+    expect(workingSheetAfterCheckout?.hash).toBe(commit1Sheet?.hash);
     expect(repo.getCellValue(1, 1)).toBe('Version 1');
     expect(repo.getCellValue(1, 2)).toBeUndefined(); // 这个值在第一个提交中不存在
     expect(repo.getCellValue(2, 1)).toBeUndefined(); // 这个值在第一个提交中不存在
@@ -147,7 +155,7 @@ describe('TableGit 基础功能测试', () => {
   });
 
   test('有未提交变更时不能checkout', () => {
-    repo.addCellChange('Sheet1', 1, 1, 'Uncommitted');
+  repo.addCellChange('default', 1, 1, 'Uncommitted');
     
     expect(() => {
       repo.checkout('main');
@@ -167,16 +175,16 @@ describe('表格结构操作测试', () => {
     const col2 = createColumn('col2', { order: 1 });
     const col3 = createColumn('col3', { order: 2 });
     
-    repo.addColumn('Sheet1', col1);
-    repo.addColumn('Sheet1', col2);
-    repo.addColumn('Sheet1', col3);
+  repo.addColumn('default', col1);
+  repo.addColumn('default', col2);
+  repo.addColumn('default', col3);
     repo.commit('添加列', 'Test User', 'test@example.com');
     
     // 移动第一列到最后
-    repo.moveColumn('Sheet1', col1.id, 2);
+  repo.moveColumn('default', col1.id, 2);
     repo.commit('移动列', 'Test User', 'test@example.com');
     
-    const workingTree = repo.getWorkingTree();
+  const workingTree = repo.getWorkingTree();
     const columnOrder = workingTree?.structure.getColumnIds();
     expect(columnOrder?.[2]).toBe(col1.id);
   });
@@ -184,10 +192,10 @@ describe('表格结构操作测试', () => {
   test('应该能够更新列信息', () => {
     const column = createColumn('test_col');
     
-    repo.addColumn('Sheet1', column);
+  repo.addColumn('default', column);
     repo.commit('添加列', 'Test User', 'test@example.com');
     
-    repo.updateColumn('Sheet1', column.id, { description: '更新后的描述' });
+  repo.updateColumn('default', column.id, { description: '更新后的描述' });
     repo.commit('更新列描述', 'Test User', 'test@example.com');
     
     const workingTree = repo.getWorkingTree();
@@ -198,10 +206,10 @@ describe('表格结构操作测试', () => {
   test('应该能够删除列', () => {
     const column = createColumn('delete_col');
     
-    repo.addColumn('Sheet1', column);
+  repo.addColumn('default', column);
     repo.commit('添加列', 'Test User', 'test@example.com');
     
-    repo.deleteColumn('Sheet1', column.id);
+  repo.deleteColumn('default', column.id);
     repo.commit('删除列', 'Test User', 'test@example.com');
     
     const workingTree = repo.getWorkingTree();
@@ -212,8 +220,8 @@ describe('表格结构操作测试', () => {
     const row1 = { id: 'row_1', height: 25, hidden: false, order: 0 };
     const row2 = { id: 'row_2', height: 30, hidden: false, order: 1 };
     
-    repo.addRow('Sheet1', row1);
-    repo.addRow('Sheet1', row2);
+  repo.addRow('default', row1);
+  repo.addRow('default', row2);
     repo.commit('添加行', 'Test User', 'test@example.com');
     
     let workingTree = repo.getWorkingTree();
@@ -221,7 +229,7 @@ describe('表格结构操作测试', () => {
     expect(workingTree?.structure.rows.has('row_2')).toBe(true);
     
     // 删除一行
-    repo.deleteRow('Sheet1', 'row_1');
+  repo.deleteRow('default', 'row_1');
     repo.commit('删除行', 'Test User', 'test@example.com');
     
     workingTree = repo.getWorkingTree();
@@ -275,7 +283,7 @@ describe('单元格格式测试', () => {
       backgroundColor: '#FFFF00'
     };
     
-    repo.addCellChange('Sheet1', 1, 1, 'Formatted Text', undefined, format);
+  repo.addCellChange('default', 1, 1, 'Formatted Text', undefined, format);
     repo.commit('添加格式化文本', 'Test User', 'test@example.com');
     
     const cell = repo.getCell(1, 1);
@@ -285,14 +293,77 @@ describe('单元格格式测试', () => {
   });
 
   test('应该能够保存公式', () => {
-    repo.addCellChange('Sheet1', 1, 1, 10);
-    repo.addCellChange('Sheet1', 1, 2, 20);
-    repo.addCellChange('Sheet1', 1, 3, 30, '=A1+B1');
+  repo.addCellChange('default', 1, 1, 10);
+  repo.addCellChange('default', 1, 2, 20);
+  repo.addCellChange('default', 1, 3, 30, '=A1+B1');
     
     repo.commit('添加公式', 'Test User', 'test@example.com');
     
     const cell = repo.getCell(1, 3);
     expect(cell?.formula).toBe('=A1+B1');
     expect(cell?.value).toBe(30);
+  });
+});
+
+describe('多工作表操作', () => {
+  let repo: TableGit;
+
+  beforeEach(() => {
+    repo = createTableGit();
+  });
+
+  test('应该能够创建并提交新的工作表', () => {
+    repo.createSheet('SheetA');
+    repo.commit('创建 SheetA', 'Tester', 'tester@example.com');
+
+    const sheets = repo.listSheets();
+    expect(sheets).toContain('SheetA');
+  });
+
+  test('复制工作表应保留单元格数据', () => {
+    repo.addCellChange('default', 0, 0, 'Origin');
+    repo.commit('初始化数据', 'Tester', 'tester@example.com');
+
+    repo.duplicateSheet('default', 'Copy');
+    repo.commit('复制默认工作表', 'Tester', 'tester@example.com');
+
+    expect(repo.listSheets()).toContain('Copy');
+    expect(repo.getCellValue(0, 0, 'Copy')).toBe('Origin');
+  });
+
+  test('重命名工作表后应阻止对旧名称的访问', () => {
+    repo.createSheet('SheetB');
+    repo.commit('创建 SheetB', 'Tester', 'tester@example.com');
+
+    repo.renameSheet('SheetB', 'SheetC');
+    repo.commit('重命名 SheetB', 'Tester', 'tester@example.com');
+
+    expect(repo.listSheets()).toContain('SheetC');
+    expect(repo.hasSheet('SheetB')).toBe(false);
+  });
+});
+
+describe('DiffMergeEngine 多工作表差异', () => {
+  test('应识别新增工作表与单元格变更', () => {
+    const repo = createTableGit();
+    const engine = new DiffMergeEngine(repo);
+
+    const baseCommit = repo.getCurrentCommitHash()!;
+
+    repo.createSheet('SheetX');
+    repo.commit('新增 SheetX', 'Tester', 'tester@example.com');
+
+    const afterAddSheet = repo.getCurrentCommitHash()!;
+    const diffSheets = engine.diff(baseCommit, afterAddSheet);
+    expect(diffSheets.sheetChanges.added).toContain('SheetX');
+
+    repo.addCellChange('default', 1, 1, 'Delta');
+    repo.commit('修改默认工作表', 'Tester', 'tester@example.com');
+
+    const afterCellChange = repo.getCurrentCommitHash()!;
+    expect(repo.getSheetSnapshot('default', { commit: afterAddSheet })?.getCellHash(1, 1)).toBeUndefined();
+    expect(repo.getSheetSnapshot('default', { commit: afterCellChange })?.getCellHash(1, 1)).toBeDefined();
+    const diffCells = engine.diff(afterAddSheet, afterCellChange);
+    expect(diffCells.sheets['default'].cellChanges.added).toHaveLength(1);
   });
 });

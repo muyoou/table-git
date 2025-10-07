@@ -1,9 +1,10 @@
-import { DiffResult, CellConflict, StructureConflict, ColumnMetadata } from '../types';
+import { DiffResult, SheetDiffResult, CellConflict, StructureConflict } from '../types';
 import { CellObject } from './cell';
 import { SheetTree } from './sheet';
+import { TableTree } from './table-tree';
 import { CommitObject } from './commit';
 import { TableGit } from './table-git';
-import { deepEqual } from '../utils/hash';
+import { deepEqual, deepClone } from '../utils/hash';
 
 /**
  * 差异计算和合并工具类
@@ -19,24 +20,77 @@ export class DiffMergeEngine {
    * 计算两个提交之间的差异
    */
   diff(commitHash1: string, commitHash2: string): DiffResult {
-    const commit1 = this.getObject(commitHash1) as CommitObject;
-    const commit2 = this.getObject(commitHash2) as CommitObject;
-    
+    const commit1 = this.getCommit(commitHash1);
+    const commit2 = this.getCommit(commitHash2);
+
     if (!commit1 || !commit2) {
       throw new Error('Invalid commit hash');
     }
-    
-    const tree1 = this.getObject(commit1.tree) as SheetTree;
-    const tree2 = this.getObject(commit2.tree) as SheetTree;
-    
-    return this.diffTrees(tree1, tree2);
+
+    const table1 = this.getTable(commit1);
+    const table2 = this.getTable(commit2);
+
+    return this.diffTables(table1, table2);
   }
 
-  /**
-   * 比较两个树对象
-   */
-  private diffTrees(tree1: SheetTree, tree2: SheetTree): DiffResult {
-    const result: DiffResult = {
+  private diffTables(table1: TableTree, table2: TableTree): DiffResult {
+    const sheetNames1 = table1.getSheetNames();
+    const sheetNames2 = table2.getSheetNames();
+
+    const added = sheetNames2.filter(name => !sheetNames1.includes(name));
+    const deleted = sheetNames1.filter(name => !sheetNames2.includes(name));
+
+    const moved: { name: string; oldIndex: number; newIndex: number }[] = [];
+    for (let i = 0; i < sheetNames2.length; i++) {
+      const name = sheetNames2[i];
+      const oldIndex = sheetNames1.indexOf(name);
+      if (oldIndex !== -1 && oldIndex !== i) {
+        moved.push({ name, oldIndex, newIndex: i });
+      }
+    }
+
+    const sheets: Record<string, SheetDiffResult> = {};
+
+    // Added sheets
+    for (const name of added) {
+      const sheet = this.getSheet(table2, name);
+      if (sheet) {
+        sheets[name] = this.diffSheetTrees(undefined, sheet);
+      }
+    }
+
+    // Deleted sheets
+    for (const name of deleted) {
+      const sheet = this.getSheet(table1, name);
+      if (sheet) {
+        sheets[name] = this.diffSheetTrees(sheet, undefined);
+      }
+    }
+
+    // Common sheets
+    for (const name of sheetNames1) {
+      if (!sheetNames2.includes(name)) continue;
+      const sheet1 = this.getSheet(table1, name);
+      const sheet2 = this.getSheet(table2, name);
+      if (!sheet1 && !sheet2) continue;
+      const sheetDiff = this.diffSheetTrees(sheet1, sheet2);
+      if (this.hasSheetDiff(sheetDiff)) {
+        sheets[name] = sheetDiff;
+      }
+    }
+
+    return {
+      sheetChanges: {
+        added,
+        deleted,
+        moved
+      },
+      sheets
+    };
+  }
+
+  private diffSheetTrees(sheet1?: SheetTree, sheet2?: SheetTree): SheetDiffResult {
+    const diff: SheetDiffResult = {
       cellChanges: {
         added: [],
         modified: [],
@@ -58,92 +112,122 @@ export class DiffMergeEngine {
       }
     };
 
-    // 比较单元格
-    this.diffCells(tree1, tree2, result);
-    
-    // 比较结构
-    this.diffStructure(tree1, tree2, result);
-    
-    return result;
+    if (!sheet1 && !sheet2) {
+      return diff;
+    }
+
+    if (!sheet1 && sheet2) {
+      diff.cellChanges.added.push(...this.collectCells(sheet2));
+      diff.structureChanges.columns.added.push(...this.collectColumns(sheet2));
+      diff.structureChanges.rows.added.push(...this.collectRows(sheet2));
+      diff.structureChanges.rows.sorted = {
+        oldOrder: [],
+        newOrder: [...sheet2.structure.getRowIds()]
+      };
+      return diff;
+    }
+
+    if (sheet1 && !sheet2) {
+      diff.cellChanges.deleted.push(...this.collectCells(sheet1));
+      diff.structureChanges.columns.deleted.push(...this.collectColumns(sheet1));
+      diff.structureChanges.rows.deleted.push(...this.collectRows(sheet1));
+      diff.structureChanges.rows.sorted = {
+        oldOrder: [...sheet1.structure.getRowIds()],
+        newOrder: []
+      };
+      return diff;
+    }
+
+    if (!sheet1 || !sheet2) {
+      return diff;
+    }
+
+    this.diffCells(sheet1, sheet2, diff);
+    this.diffStructure(sheet1, sheet2, diff);
+    return diff;
   }
 
-  /**
-   * 比较单元格差异
-   */
-  private diffCells(tree1: SheetTree, tree2: SheetTree, result: DiffResult): void {
-    const allCellKeys = new Set([...tree1.cells.keys(), ...tree2.cells.keys()]);
-    
-    for (const key of allCellKeys) {
-      const hash1 = tree1.cells.get(key);
-      const hash2 = tree2.cells.get(key);
-      
+  private diffCells(sheet1: SheetTree, sheet2: SheetTree, diff: SheetDiffResult): void {
+    const keys = new Set([...sheet1.cells.keys(), ...sheet2.cells.keys()]);
+
+    for (const key of keys) {
+      const hash1 = sheet1.cells.get(key);
+      const hash2 = sheet2.cells.get(key);
+
       if (!hash1 && hash2) {
-        // 新增的单元格
         const cell = this.getObject(hash2) as CellObject;
-        result.cellChanges.added.push(cell);
+        if (cell) {
+          diff.cellChanges.added.push(cell);
+        }
       } else if (hash1 && !hash2) {
-        // 删除的单元格
         const cell = this.getObject(hash1) as CellObject;
-        result.cellChanges.deleted.push(cell);
-      } else if (hash1 !== hash2) {
-        // 修改的单元格
-        if (hash1 && hash2) {
-          const oldCell = this.getObject(hash1) as CellObject;
-          const newCell = this.getObject(hash2) as CellObject;
-          result.cellChanges.modified.push({ old: oldCell, new: newCell });
+        if (cell) {
+          diff.cellChanges.deleted.push(cell);
+        }
+      } else if (hash1 && hash2 && hash1 !== hash2) {
+        const oldCell = this.getObject(hash1) as CellObject;
+        const newCell = this.getObject(hash2) as CellObject;
+        if (oldCell && newCell) {
+          diff.cellChanges.modified.push({ old: oldCell, new: newCell });
         }
       }
     }
   }
 
-  /**
-   * 比较结构差异
-   */
-  private diffStructure(tree1: SheetTree, tree2: SheetTree, result: DiffResult): void {
-    const columns1 = tree1.structure.columns;
-    const columns2 = tree2.structure.columns;
-    
-    // 检查新增和修改的列
+  private diffStructure(sheet1: SheetTree, sheet2: SheetTree, diff: SheetDiffResult): void {
+    const columns1 = sheet1.structure.columns;
+    const columns2 = sheet2.structure.columns;
+
     for (const [id, col2] of columns2) {
       const col1 = columns1.get(id);
       if (!col1) {
-        result.structureChanges.columns.added.push(col2);
+        diff.structureChanges.columns.added.push(deepClone(col2));
       } else if (!deepEqual(col1, col2)) {
-        result.structureChanges.columns.modified.push({ old: col1, new: col2 });
+        diff.structureChanges.columns.modified.push({ old: deepClone(col1), new: deepClone(col2) });
       }
     }
-    
-    // 检查删除的列
+
     for (const [id, col1] of columns1) {
       if (!columns2.has(id)) {
-        result.structureChanges.columns.deleted.push(col1);
+        diff.structureChanges.columns.deleted.push(deepClone(col1));
       }
     }
-    
-    // 检查列顺序变化
-    this.diffColumnOrder(tree1, tree2, result);
-    
-    // 检查行顺序变化
-    this.diffRowOrder(tree1, tree2, result);
+
+    this.diffColumnOrder(sheet1, sheet2, diff);
+    this.diffRowOrder(sheet1, sheet2, diff);
+
+    const rows1 = sheet1.structure.rows;
+    const rows2 = sheet2.structure.rows;
+
+    for (const [id, row2] of rows2) {
+      const row1 = rows1.get(id);
+      if (!row1) {
+        diff.structureChanges.rows.added.push(deepClone(row2));
+      } else if (!deepEqual(row1, row2)) {
+        diff.structureChanges.rows.modified.push({ old: deepClone(row1), new: deepClone(row2) });
+      }
+    }
+
+    for (const [id, row1] of rows1) {
+      if (!rows2.has(id)) {
+        diff.structureChanges.rows.deleted.push(deepClone(row1));
+      }
+    }
   }
 
-  /**
-   * 比较列顺序差异
-   */
-  private diffColumnOrder(tree1: SheetTree, tree2: SheetTree, result: DiffResult): void {
-    const order1 = tree1.structure.columnOrder;
-    const order2 = tree2.structure.columnOrder;
-    
+  private diffColumnOrder(sheet1: SheetTree, sheet2: SheetTree, diff: SheetDiffResult): void {
+    const order1 = sheet1.structure.columnOrder;
+    const order2 = sheet2.structure.columnOrder;
+
     if (!deepEqual(order1, order2)) {
-      // 分析具体的移动操作
       for (let i = 0; i < order2.length; i++) {
         const colId = order2[i];
         const oldIndex = order1.indexOf(colId);
         if (oldIndex !== -1 && oldIndex !== i) {
-          const column = tree2.structure.columns.get(colId);
+          const column = sheet2.structure.columns.get(colId);
           if (column) {
-            result.structureChanges.columns.moved.push({
-              column,
+            diff.structureChanges.columns.moved.push({
+              column: deepClone(column),
               oldIndex,
               newIndex: i
             });
@@ -153,17 +237,14 @@ export class DiffMergeEngine {
     }
   }
 
-  /**
-   * 比较行顺序差异
-   */
-  private diffRowOrder(tree1: SheetTree, tree2: SheetTree, result: DiffResult): void {
-    const order1 = tree1.structure.rowOrder;
-    const order2 = tree2.structure.rowOrder;
-    
+  private diffRowOrder(sheet1: SheetTree, sheet2: SheetTree, diff: SheetDiffResult): void {
+    const order1 = sheet1.structure.rowOrder;
+    const order2 = sheet2.structure.rowOrder;
+
     if (!deepEqual(order1, order2)) {
-      result.structureChanges.rows.sorted = {
-        oldOrder: order1,
-        newOrder: order2
+      diff.structureChanges.rows.sorted = {
+        oldOrder: [...order1],
+        newOrder: [...order2]
       };
     }
   }
@@ -203,137 +284,219 @@ export class DiffMergeEngine {
    */
   private threeWayMerge(baseHash: string, currentHash: string, targetHash: string): any[] {
     const conflicts: any[] = [];
-    
-    const baseCommit = this.getObject(baseHash) as CommitObject;
-    const currentCommit = this.getObject(currentHash) as CommitObject;
-    const targetCommit = this.getObject(targetHash) as CommitObject;
-    
-    const baseTree = this.getObject(baseCommit.tree) as SheetTree;
-    const currentTree = this.getObject(currentCommit.tree) as SheetTree;
-    const targetTree = this.getObject(targetCommit.tree) as SheetTree;
-    
-    // 合并单元格
-    this.mergeCells(baseTree, currentTree, targetTree, conflicts);
-    
-    // 合并结构
-    this.mergeStructure(baseTree, currentTree, targetTree, conflicts);
-    
+
+    const baseCommit = this.getCommit(baseHash);
+    const currentCommit = this.getCommit(currentHash);
+    const targetCommit = this.getCommit(targetHash);
+
+    if (!baseCommit || !currentCommit || !targetCommit) {
+      return conflicts;
+    }
+
+    const baseTable = this.getTable(baseCommit);
+    const currentTable = this.getTable(currentCommit);
+    const targetTable = this.getTable(targetCommit);
+
+    const sheetNames = new Set<string>([
+      ...baseTable.getSheetNames(),
+      ...currentTable.getSheetNames(),
+      ...targetTable.getSheetNames()
+    ]);
+
+    for (const name of sheetNames) {
+      const sheetConflicts = this.mergeSheet(
+        name,
+        this.getSheet(baseTable, name),
+        this.getSheet(currentTable, name),
+        this.getSheet(targetTable, name)
+      );
+      conflicts.push(...sheetConflicts);
+    }
+
     return conflicts;
   }
 
-  /**
-   * 合并单元格
-   */
+  private mergeSheet(
+    sheetName: string,
+    baseSheet?: SheetTree,
+    currentSheet?: SheetTree,
+    targetSheet?: SheetTree
+  ): any[] {
+    const conflicts: any[] = [];
+
+    if (!baseSheet) {
+      if (!currentSheet || !targetSheet) {
+        return conflicts;
+      }
+      if (this.sheetEquals(currentSheet, targetSheet)) {
+        return conflicts;
+      }
+      conflicts.push({
+        type: 'sheet',
+        sheetName,
+        reason: 'Both branches added the same sheet with different contents.'
+      });
+      return conflicts;
+    }
+
+    if (!currentSheet && !targetSheet) {
+      return conflicts; // both removed
+    }
+
+    if (!currentSheet && targetSheet) {
+      if (!this.sheetEquals(baseSheet, targetSheet)) {
+        conflicts.push({
+          type: 'sheet',
+          sheetName,
+          reason: 'Sheet deleted in current branch but modified in target branch.'
+        });
+      }
+      return conflicts;
+    }
+
+    if (currentSheet && !targetSheet) {
+      if (!this.sheetEquals(baseSheet, currentSheet)) {
+        conflicts.push({
+          type: 'sheet',
+          sheetName,
+          reason: 'Sheet deleted in target branch but modified in current branch.'
+        });
+      }
+      return conflicts;
+    }
+
+    if (!currentSheet || !targetSheet) {
+      return conflicts;
+    }
+
+    this.mergeCells(baseSheet, currentSheet, targetSheet, conflicts, sheetName);
+    this.mergeStructure(baseSheet, currentSheet, targetSheet, conflicts, sheetName);
+
+    return conflicts;
+  }
+
   private mergeCells(
-    baseTree: SheetTree, 
-    currentTree: SheetTree, 
-    targetTree: SheetTree, 
-    conflicts: any[]
+    baseSheet: SheetTree,
+    currentSheet: SheetTree,
+    targetSheet: SheetTree,
+    conflicts: any[],
+    sheetName: string
   ): void {
     const allCellKeys = new Set([
-      ...baseTree.cells.keys(),
-      ...currentTree.cells.keys(),
-      ...targetTree.cells.keys()
+      ...baseSheet.cells.keys(),
+      ...currentSheet.cells.keys(),
+      ...targetSheet.cells.keys()
     ]);
-    
+
     for (const key of allCellKeys) {
-      const baseCell = baseTree.cells.get(key);
-      const currentCell = currentTree.cells.get(key);
-      const targetCell = targetTree.cells.get(key);
-      
+      const baseCell = baseSheet.cells.get(key);
+      const currentCell = currentSheet.cells.get(key);
+      const targetCell = targetSheet.cells.get(key);
+
       if (currentCell !== targetCell) {
         if (baseCell === currentCell) {
-          // 只有目标分支修改了，接受目标分支的修改
           continue;
         } else if (baseCell === targetCell) {
-          // 只有当前分支修改了，保留当前分支的修改
           continue;
         } else {
-          // 双方都修改了，产生冲突
           conflicts.push({
             type: 'cell',
+            sheetName,
             position: key,
             base: baseCell ? this.getObject(baseCell) : null,
             current: currentCell ? this.getObject(currentCell) : null,
             target: targetCell ? this.getObject(targetCell) : null
-          });
+          } as CellConflict & { type: 'cell'; sheetName: string });
         }
       }
     }
   }
 
-  /**
-   * 合并结构
-   */
   private mergeStructure(
-    baseTree: SheetTree, 
-    currentTree: SheetTree, 
-    targetTree: SheetTree, 
-    conflicts: any[]
+    baseSheet: SheetTree,
+    currentSheet: SheetTree,
+    targetSheet: SheetTree,
+    conflicts: any[],
+    sheetName: string
   ): void {
-    // 合并列结构
-    this.mergeColumns(baseTree, currentTree, targetTree, conflicts);
-    
-    // 合并行结构
-    this.mergeRows(baseTree, currentTree, targetTree, conflicts);
+    this.mergeColumns(baseSheet, currentSheet, targetSheet, conflicts, sheetName);
+    this.mergeRows(baseSheet, currentSheet, targetSheet, conflicts, sheetName);
   }
 
-  /**
-   * 合并列结构
-   */
   private mergeColumns(
-    baseTree: SheetTree, 
-    currentTree: SheetTree, 
-    targetTree: SheetTree, 
-    conflicts: any[]
+    baseSheet: SheetTree,
+    currentSheet: SheetTree,
+    targetSheet: SheetTree,
+    conflicts: any[],
+    sheetName: string
   ): void {
-    const baseColumns = baseTree.structure.columns;
-    const currentColumns = currentTree.structure.columns;
-    const targetColumns = targetTree.structure.columns;
-    
-    const allColumnIds = new Set([
+    const baseColumns = baseSheet.structure.columns;
+    const currentColumns = currentSheet.structure.columns;
+    const targetColumns = targetSheet.structure.columns;
+
+    const allIds = new Set([
       ...baseColumns.keys(),
       ...currentColumns.keys(),
       ...targetColumns.keys()
     ]);
-    
-    for (const id of allColumnIds) {
+
+    for (const id of allIds) {
       const baseCol = baseColumns.get(id);
       const currentCol = currentColumns.get(id);
       const targetCol = targetColumns.get(id);
-      
+
       if (!deepEqual(currentCol, targetCol)) {
-        if (deepEqual(baseCol, currentCol)) {
-          // 只有目标分支修改了
+        if (deepEqual(baseCol, currentCol) || deepEqual(baseCol, targetCol)) {
           continue;
-        } else if (deepEqual(baseCol, targetCol)) {
-          // 只有当前分支修改了
-          continue;
-        } else {
-          // 双方都修改了，产生冲突
-          conflicts.push({
-            type: 'column',
-            id,
-            base: baseCol,
-            current: currentCol,
-            target: targetCol
-          });
         }
+        conflicts.push({
+          type: 'column',
+          sheetName,
+          id,
+          base: baseCol,
+          current: currentCol,
+          target: targetCol
+        } as StructureConflict & { sheetName: string });
       }
     }
   }
 
-  /**
-   * 合并行结构
-   */
   private mergeRows(
-    baseTree: SheetTree, 
-    currentTree: SheetTree, 
-    targetTree: SheetTree, 
-    conflicts: any[]
+    baseSheet: SheetTree,
+    currentSheet: SheetTree,
+    targetSheet: SheetTree,
+    conflicts: any[],
+    sheetName: string
   ): void {
-    // 类似于列的合并逻辑
-    // 这里简化处理
+    const baseRows = baseSheet.structure.rows;
+    const currentRows = currentSheet.structure.rows;
+    const targetRows = targetSheet.structure.rows;
+
+    const allIds = new Set([
+      ...baseRows.keys(),
+      ...currentRows.keys(),
+      ...targetRows.keys()
+    ]);
+
+    for (const id of allIds) {
+      const baseRow = baseRows.get(id);
+      const currentRow = currentRows.get(id);
+      const targetRow = targetRows.get(id);
+
+      if (!deepEqual(currentRow, targetRow)) {
+        if (deepEqual(baseRow, currentRow) || deepEqual(baseRow, targetRow)) {
+          continue;
+        }
+        conflicts.push({
+          type: 'row',
+          sheetName,
+          id,
+          base: baseRow,
+          current: currentRow,
+          target: targetRow
+        } as StructureConflict & { sheetName: string });
+      }
+    }
   }
 
   /**
@@ -371,8 +534,76 @@ export class DiffMergeEngine {
 
   // 辅助方法
 
+  private getCommit(hash: string): CommitObject | undefined {
+    return this.getObject(hash) as CommitObject | undefined;
+  }
+
+  private getTable(commit: CommitObject): TableTree {
+    const table = this.getObject(commit.tree) as TableTree | undefined;
+    if (!table) {
+      throw new Error('Table tree not found for commit');
+    }
+    return table;
+  }
+
+  private getSheet(table: TableTree, sheetName: string): SheetTree | undefined {
+    const hash = table.getSheetHash(sheetName);
+    if (!hash) {
+      return undefined;
+    }
+    const sheet = this.getObject(hash) as SheetTree | undefined;
+    return sheet ? sheet.clone() : undefined;
+  }
+
+  private collectCells(sheet: SheetTree): CellObject[] {
+    const cells: CellObject[] = [];
+    for (const hash of sheet.cells.values()) {
+      const cell = this.getObject(hash) as CellObject | undefined;
+      if (cell) {
+        cells.push(cell);
+      }
+    }
+    return cells;
+  }
+
+  private collectColumns(sheet: SheetTree): any[] {
+    return Array.from(sheet.structure.columns.values()).map(col => deepClone(col));
+  }
+
+  private collectRows(sheet: SheetTree): any[] {
+    return Array.from(sheet.structure.rows.values()).map(row => deepClone(row));
+  }
+
+  private hasSheetDiff(diff: SheetDiffResult): boolean {
+    const { cellChanges, structureChanges } = diff;
+    return (
+      cellChanges.added.length > 0 ||
+      cellChanges.modified.length > 0 ||
+      cellChanges.deleted.length > 0 ||
+      structureChanges.columns.added.length > 0 ||
+      structureChanges.columns.modified.length > 0 ||
+      structureChanges.columns.deleted.length > 0 ||
+      structureChanges.columns.moved.length > 0 ||
+      structureChanges.rows.added.length > 0 ||
+      structureChanges.rows.modified.length > 0 ||
+      structureChanges.rows.deleted.length > 0 ||
+      structureChanges.rows.sorted.oldOrder.length > 0 ||
+      structureChanges.rows.sorted.newOrder.length > 0
+    );
+  }
+
+  private sheetEquals(sheetA?: SheetTree, sheetB?: SheetTree): boolean {
+    if (!sheetA && !sheetB) return true;
+    if (!sheetA || !sheetB) return false;
+    return sheetA.hash === sheetB.hash;
+  }
+
   private getObject(hash: string): any {
-    return (this.tableGit as any).objects.get(hash);
+    const repo = this.tableGit as any;
+    if (typeof repo.getObject === 'function') {
+      return repo.getObject(hash);
+    }
+    return repo.objects?.get(hash);
   }
 
   private getCurrentCommitHash(): string | undefined {
