@@ -3,6 +3,21 @@
   "version": "1.0.0",
   "description": "A Git-inspired version control system for tables with cell-level granularity",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "doc"
+  ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -12,7 +27,8 @@
     "clean": "rimraf dist",
     "demo:build": "npm run build && node demo/build-demo.js",
     "demo:serve": "node demo/server.js",
-    "demo:bundle": "node demo/esbuild.config.js"
+    "demo:bundle": "node demo/esbuild.config.js",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
     "version-control",

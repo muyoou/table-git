@@ -9,6 +9,10 @@ function normalize(value: any): any {
     return value.map(item => normalize(item));
   }
 
+  if (value instanceof Set) {
+    return Array.from(value).map(item => normalize(item)).sort();
+  }
+
   if (value instanceof Date) {
     return value.toISOString();
   }
@@ -20,6 +24,10 @@ function normalize(value: any): any {
       return entries;
     }
 
+    if (value instanceof RegExp) {
+      return value.toString();
+    }
+
     const sortedKeys = Object.keys(value).sort();
     const result: Record<string, any> = {};
     for (const key of sortedKeys) {
@@ -29,6 +37,15 @@ function normalize(value: any): any {
   }
 
   return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, any> {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 /**
@@ -49,8 +66,24 @@ export function calculateHash(obj: any): string {
  */
 export function generateId(prefix: string = ''): string {
   const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substr(2, 5);
-  return `${prefix}${timestamp}_${random}`;
+
+  let randomSegment: string;
+  const globalCrypto = typeof globalThis !== 'undefined' ? (globalThis as any).crypto : undefined;
+
+  if (globalCrypto?.randomUUID) {
+    randomSegment = globalCrypto.randomUUID().split('-')[0];
+  } else if (globalCrypto?.getRandomValues) {
+    const array = new Uint32Array(2);
+    globalCrypto.getRandomValues(array);
+    randomSegment = Array.from(array)
+      .map(num => num.toString(36))
+      .join('')
+      .slice(0, 8);
+  } else {
+    randomSegment = Math.random().toString(36).slice(2, 10);
+  }
+
+  return `${prefix}${timestamp}_${randomSegment}`;
 }
 
 /**
@@ -59,7 +92,75 @@ export function generateId(prefix: string = ''): string {
  * @returns 克隆后的对象
  */
 export function deepClone<T>(obj: T): T {
-  return JSON.parse(JSON.stringify(obj));
+  const visited = new WeakMap<object, any>();
+
+  const clone = (value: any): any => {
+    if (value === null || typeof value !== 'object') {
+      return value;
+    }
+
+    if (value instanceof Date) {
+      return new Date(value.getTime());
+    }
+
+    if (value instanceof RegExp) {
+      const flags = value.flags;
+      return new RegExp(value.source, flags);
+    }
+
+    if (value instanceof Map) {
+      if (visited.has(value)) {
+        return visited.get(value);
+      }
+      const result = new Map();
+      visited.set(value, result);
+      value.forEach((mapValue, mapKey) => {
+        result.set(mapKey, clone(mapValue));
+      });
+      return result;
+    }
+
+    if (value instanceof Set) {
+      if (visited.has(value)) {
+        return visited.get(value);
+      }
+      const result = new Set();
+      visited.set(value, result);
+      value.forEach(item => {
+        result.add(clone(item));
+      });
+      return result;
+    }
+
+    if (Array.isArray(value)) {
+      if (visited.has(value)) {
+        return visited.get(value);
+      }
+      const result: any[] = [];
+      visited.set(value, result);
+      value.forEach((item, index) => {
+        result[index] = clone(item);
+      });
+      return result;
+    }
+
+    if (isPlainObject(value)) {
+      if (visited.has(value)) {
+        return visited.get(value);
+      }
+
+      const result: Record<string, any> = {};
+      visited.set(value, result);
+      for (const key of Object.keys(value)) {
+        result[key] = clone(value[key]);
+      }
+      return result;
+    }
+
+    return value;
+  };
+
+  return clone(obj);
 }
 
 /**
