@@ -50,9 +50,23 @@
           <button id="btn-commit" class="primary">提交变更</button>
         </div>
         <div class="muted" id="status"></div>
+        <div class="muted" id="active-sheet"></div>
+        <h2>工作表操作</h2>
+        <div class="controls">
+          <input id="sheet-name" placeholder="新工作表名" />
+          <button id="btn-create-sheet">新增工作表</button>
+          <button id="btn-duplicate-sheet">复制当前</button>
+        </div>
+        <div class="controls">
+          <input id="sheet-rename" placeholder="当前工作表新名称" />
+          <button id="btn-rename-sheet">重命名</button>
+          <button id="btn-delete-sheet">删除</button>
+        </div>
       </div>
 
       <div class="card col">
+        <h2>工作表</h2>
+        <div id="sheets" class="cols">(初始化后显示)</div>
         <h2>列结构</h2>
         <div id="columns" class="cols">(初始化后显示)</div>
         <h2>分支</h2>
@@ -70,6 +84,10 @@
         <div class="controls">
           <button id="btn-insert-col">插入列</button>
           <button id="btn-insert-row">插入行</button>
+          <input id="col-index" placeholder="列索引" style="width:80px" />
+          <button id="btn-delete-col-index">删除列(索引)</button>
+          <input id="row-index" placeholder="行索引" style="width:80px" />
+          <button id="btn-delete-row-index">删除行(索引)</button>
         </div>
         <div id="grid" class="grid"></div>
       </div>

@@ -12,7 +12,7 @@
     "clean": "rimraf dist",
     "demo:build": "npm run build && node demo/build-demo.js",
     "demo:serve": "node demo/server.js",
-    "demo:bundle": "node -e \"process.env.NODE_PATH='demo';require('module').Module._initPaths();\" && node -e \"require('esbuild');\" || npm i esbuild -D && node demo/esbuild.config.js"
+    "demo:bundle": "node demo/esbuild.config.js"
   },
   "keywords": [
     "version-control",

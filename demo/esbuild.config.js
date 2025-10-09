@@ -1,6 +1,9 @@
 const esbuild = require('esbuild');
 const path = require('path');
 
+// 添加一个时间戳 banner，确保每次构建输出文件变化，便于浏览器缓存失效
+const buildVersion = Date.now();
+
 // 浏览器环境打包 demo/app.ts -> demo/bundle.js
 // 因为库内部用到了 'crypto'（Node），这里使用轻量 polyfill 替代实现 sha1。
 
@@ -42,12 +45,18 @@ const defineSha1 = () => ({
 esbuild.build({
 	entryPoints: ['demo/app.ts'],
 	outfile: 'demo/bundle.js',
+	banner: { js: `// build-version:${buildVersion}` },
 	bundle: true,
 	format: 'iife',
 	platform: 'browser',
 	sourcemap: true,
-		plugins: [aliasCrypto(), defineSha1()],
+	plugins: [aliasCrypto(), defineSha1()],
 	loader: { '.ts': 'ts' },
 	tsconfig: 'tsconfig.json',
+	logLevel: 'info',
+	// 不丢弃 console，显式关闭 minify 以便调试
+	minify: false,
+}).then(()=>{
+	console.log('[build] bundle generated with version', buildVersion);
 }).catch(() => process.exit(1));
 

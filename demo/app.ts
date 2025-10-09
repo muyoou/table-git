@@ -14,6 +14,7 @@ type El = HTMLElement | null;
 const $ = (id: string) => document.getElementById(id);
 
 let repo: TableGit | null = null;
+let activeSheet = 'default';
 const registry = new FormatterRegistry();
 registry.register(new FunctionFormatter({ name: 'csv', format: csvFormatter }));
 registry.register(new FunctionFormatter({ name: 'json', format: jsonFormatter }));
@@ -37,21 +38,118 @@ function renderList(elId: string, items: string[]) {
 	setHTML(el, html);
 }
 
+function getSheetNames(): string[] {
+	if (!repo) return [];
+	const sheets = repo.listSheets({ includeStaged: true });
+	return sheets.length ? sheets : [];
+}
+
+function ensureActiveSheet() {
+	if (!repo) {
+		activeSheet = 'default';
+		setText($("active-sheet"), '当前工作表：-');
+		return;
+	}
+	const sheets = getSheetNames();
+	if (!sheets.includes(activeSheet)) {
+		activeSheet = sheets[0] ?? 'default';
+	}
+	setText($("active-sheet"), sheets.length ? `当前工作表：${activeSheet}` : '当前工作表：-');
+}
+
+function renderSheets() {
+	const container = $("sheets");
+	if (!container) return;
+	if (!repo) {
+		setHTML(container, '(未初始化)');
+		return;
+	}
+	ensureActiveSheet();
+	const sheets = getSheetNames();
+	if (!sheets.length) {
+		setHTML(container, '(无工作表)');
+		return;
+	}
+	const items = sheets.map((name, index) => {
+		const prefix = name === activeSheet ? '★ ' : '';
+		const disableDelete = (sheets.length === 1) ? ' disabled' : '';
+		const isDefault = name === 'default';
+		return `<span>${escapeHtml(prefix + name)}</span>
+			<button data-sheet-select="${index}" class="mini">切换</button>
+			<button data-sheet-duplicate="${index}" class="mini">复制</button>
+			<button data-sheet-delete="${index}" class="mini"${disableDelete || isDefault ? ' disabled' : ''}>删除</button>`;
+	});
+	setHTML(container, `<ul class="list">${items.map(item => `<li>${item}</li>`).join('')}</ul>`);
+
+	container.querySelectorAll('button[data-sheet-select]').forEach(btn => {
+		btn.addEventListener('click', () => {
+			const idx = parseInt((btn as HTMLButtonElement).dataset.sheetSelect || '-1', 10);
+			const name = sheets[idx];
+			if (!name) return;
+			activeSheet = name;
+			refreshAll();
+		});
+	});
+
+	container.querySelectorAll('button[data-sheet-duplicate]').forEach(btn => {
+		btn.addEventListener('click', () => {
+			if (!repo) return;
+			const idx = parseInt((btn as HTMLButtonElement).dataset.sheetDuplicate || '-1', 10);
+			const name = sheets[idx];
+			if (!name) return;
+			const nextName = window.prompt(`复制工作表 "${name}" 为：`, `${name}_副本`);
+			if (!nextName) return;
+			try {
+				repo.duplicateSheet(name, nextName.trim());
+				activeSheet = nextName.trim();
+			} catch (e) {
+				console.warn(e);
+			}
+			refreshAll();
+		});
+	});
+
+	container.querySelectorAll('button[data-sheet-delete]').forEach(btn => {
+		btn.addEventListener('click', () => {
+			if (!repo) return;
+			const idx = parseInt((btn as HTMLButtonElement).dataset.sheetDelete || '-1', 10);
+			const name = sheets[idx];
+			if (!name) return;
+			if (!window.confirm(`确定删除工作表 "${name}"？`)) return;
+			try {
+				repo.deleteSheet(name);
+				if (activeSheet === name) {
+					const remaining = getSheetNames().filter(n => n !== name);
+					activeSheet = remaining[0] ?? 'default';
+				}
+			} catch (e) {
+				console.warn(e);
+			}
+			refreshAll();
+		});
+	});
+}
+
 function refreshAll() {
 	if (!repo) return;
+	ensureActiveSheet();
+	renderSheets();
 	// status
 	const s = repo.status();
 	setText($("status"), `分支: ${s.branch}, 暂存: ${s.stagedChanges}, 最后提交: ${s.lastCommit || '无'}`);
+	setText($("active-sheet"), `当前工作表：${activeSheet}`);
 
 	// columns
-	const tree = repo.getWorkingTree();
-	if (tree) {
-			const cols = tree.structure.getColumnIds().map((id, i) => {
-			const c = tree.structure.getColumn(id)!;
-			const name = (c as any).name || id; // 我们的 ColumnMetadata 没有 name 字段，这里向后兼容
-				return `${name} (${c.dataType}) width=${c.width}`;
+	const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+	if (sheet) {
+		const cols = sheet.structure.getColumnIds().map((id) => {
+			const c = sheet.structure.getColumn(id)!;
+			const name = (c as any).name || id;
+			return `${name} (${c.dataType}) width=${c.width}`;
 		});
-			renderList('columns', cols);
+		renderList('columns', cols);
+	} else {
+		renderList('columns', ['(无结构)']);
 	}
 
 	// branches
@@ -144,16 +242,16 @@ function refreshAll() {
 
 function renderGrid() {
 	if (!repo) return;
-	const tree = repo.getWorkingTree();
-	if (!tree) { setHTML($("grid"), '(空)'); return; }
+	const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+	if (!sheet) { setHTML($("grid"), '(空)'); return; }
 
 	// 粗略渲染矩阵（包含表头）
-	const adapter = new TableDataAdapter(repo);
+	const adapter = new TableDataAdapter(repo, activeSheet);
 	const data = adapter.build(); // 默认包含暂存区的临时预览
 	const rows = data.matrix;
 	const hasHeader = data.header.length > 0;
 
-	const html: string[] = ['<table>'];
+	const html: string[] = ['<table>', `<caption>工作表：${escapeHtml(activeSheet)}</caption>`];
 	if (hasHeader && rows.length) {
 		html.push('<thead><tr>');
 		for (let c = 0; c < rows[0].length; c++) {
@@ -181,12 +279,12 @@ function renderGrid() {
 
 function refreshPreview() {
 	if (!repo) return;
-	const adapter = new TableDataAdapter(repo);
+	const adapter = new TableDataAdapter(repo, activeSheet);
 	const data = adapter.build(); // 默认包含暂存区的临时预览
 	const html = registry.format('html', data, { includeHeader: true });
 	const csv = registry.format('csv', data, { includeHeader: true, quoteText: true });
 	const json = registry.format('json', data, { shape: 'rows', space: 2 });
-	setText($("previewFrom"), '预览来源：当前工作区');
+	setText($("previewFrom"), `预览来源：当前工作区（${activeSheet}）`);
 
 	// HTML -> iframe
 	const doc = (document.getElementById('htmlFrame') as HTMLIFrameElement).contentWindow?.document;
@@ -200,15 +298,16 @@ function refreshPreview() {
 }
 
 	// 基于分支/提交的临时预览（不影响当前工作区）
-	function previewFrom(source: { branch?: string; commit?: string }, label: string) {
+	function previewFrom(source: { branch?: string; commit?: string } | undefined, label: string, sheetName?: string) {
 		if (!repo) return;
-			const adapter = new TableDataAdapter(repo);
-			const data = adapter.build(source);
+		const targetSheet = sheetName ?? activeSheet;
+		const adapter = new TableDataAdapter(repo, targetSheet);
+		const data = adapter.build(source);
 		const html = registry.format('html', data, { includeHeader: true });
 		const csv = registry.format('csv', data, { includeHeader: true, quoteText: true });
 		const json = registry.format('json', data, { shape: 'rows', space: 2 });
 
-		setText($("previewFrom"), `预览来源：${label}`);
+		setText($("previewFrom"), `预览来源：${label}（${targetSheet}）`);
 
 		const doc = (document.getElementById('htmlFrame') as HTMLIFrameElement).contentWindow?.document;
 		if (doc) { doc.open(); doc.write(`<!doctype html><meta charset='utf-8'><style>table{border-collapse:collapse}th,td{border:1px solid #ddd;padding:6px}</style>${html}`); doc.close(); }
@@ -234,7 +333,12 @@ function bindTabs() {
 }
 
 function bindActions() {
-	($("btn-init") as HTMLButtonElement).onclick = () => { repo = createSampleTable(); refreshAll(); };
+	($("btn-init") as HTMLButtonElement).onclick = () => {
+		repo = createSampleTable();
+		seedDemoSheets();
+		activeSheet = 'default';
+		refreshAll();
+	};
 	($("btn-create-branch") as HTMLButtonElement).onclick = () => {
 		if (!repo) return;
 		const b = (document.getElementById('branch') as HTMLInputElement).value || 'temp';
@@ -242,6 +346,84 @@ function bindActions() {
 		refreshAll();
 	};
 
+	const btnCreateSheet = document.getElementById('btn-create-sheet') as HTMLButtonElement | null;
+	if (btnCreateSheet) {
+		btnCreateSheet.onclick = () => {
+			if (!repo) return;
+			const input = document.getElementById('sheet-name') as HTMLInputElement | null;
+			const name = (input?.value.trim()) || `sheet_${generateId('')}`;
+			if (!name) return;
+			try {
+				repo.createSheet(name);
+				activeSheet = name;
+				if (input) input.value = '';
+			} catch (e: any) {
+				alert(e?.message || String(e));
+			}
+			refreshAll();
+		};
+	}
+
+	const btnDuplicateSheet = document.getElementById('btn-duplicate-sheet') as HTMLButtonElement | null;
+	if (btnDuplicateSheet) {
+		btnDuplicateSheet.onclick = () => {
+			if (!repo) return;
+			const suggestion = `${activeSheet}_副本`;
+			const name = window.prompt('复制当前工作表为：', suggestion)?.trim();
+			if (!name) return;
+			try {
+				repo.duplicateSheet(activeSheet, name);
+				activeSheet = name;
+			} catch (e: any) {
+				alert(e?.message || String(e));
+			}
+			refreshAll();
+		};
+	}
+
+	const btnRenameSheet = document.getElementById('btn-rename-sheet') as HTMLButtonElement | null;
+	if (btnRenameSheet) {
+		btnRenameSheet.onclick = () => {
+			if (!repo) return;
+			const input = document.getElementById('sheet-rename') as HTMLInputElement | null;
+			const name = input?.value.trim();
+			if (!name) return;
+			try {
+				repo.renameSheet(activeSheet, name);
+				activeSheet = name;
+				if (input) input.value = '';
+			} catch (e: any) {
+				alert(e?.message || String(e));
+			}
+			refreshAll();
+		};
+	}
+
+	const btnDeleteSheet = document.getElementById('btn-delete-sheet') as HTMLButtonElement | null;
+	if (btnDeleteSheet) {
+		btnDeleteSheet.onclick = () => {
+			if (!repo) return;
+			if (activeSheet === 'default') {
+				alert('默认工作表不可删除');
+				return;
+			}
+			const sheets = getSheetNames();
+			if (sheets.length <= 1) {
+				alert('至少需要保留一个工作表');
+				return;
+			}
+			if (!window.confirm(`确认删除当前工作表 "${activeSheet}"？`)) return;
+			try {
+				const removed = activeSheet;
+				repo.deleteSheet(removed);
+				const remaining = getSheetNames().filter(n => n !== removed);
+				activeSheet = remaining[0] ?? 'default';
+			} catch (e: any) {
+				alert(e?.message || String(e));
+			}
+			refreshAll();
+		};
+	}
 	// 表格内的“修改”按钮（事件委托，修改后仅暂存，不自动提交）
 	const grid = document.getElementById('grid');
 	if (grid) {
@@ -258,13 +440,13 @@ function bindActions() {
 			const col = parseInt(colStr, 10);
 
 			// 读取当前值作为默认内容（基于工作区）
-			const currentVal = repo.getCellValue(row, col);
+			const currentVal = repo.getCellValue(row, col, activeSheet);
 			const next = window.prompt(`修改单元格 (${row}, ${col}) 的值：`, currentVal != null ? String(currentVal) : '');
 			if (next === null) return; // 用户取消
 
 			// 暂存变更（不提交）
 			try {
-				repo.addCellChange('default', row, col, next);
+				repo.addCellChange(activeSheet, row, col, next);
 			} catch (err) {
 				console.warn(err);
 			}
@@ -294,23 +476,28 @@ function bindActions() {
 	if (btnInsertCol) {
 		btnInsertCol.onclick = () => {
 			if (!repo) return;
-			// 依据当前结构下一个序号作为 order
-			const tree = repo.getWorkingTree();
-			const order = tree ? tree.structure.getColumnIds().length : 0;
-			const colId = `col_${generateId('')}`;
-			const col = createColumn(colId, { order });
-			try {
-				repo.addColumn('default', col); // 暂存结构变更
-			} catch (e) { console.warn(e); }
-
-			// 为新列追加占位单元格，让可视矩阵立即扩展
-			const adapter = new TableDataAdapter(repo);
+			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+			const adapter = new TableDataAdapter(repo, activeSheet);
 			const data = adapter.build();
-			const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
-			const newColIndex = hasBounds ? (data.maxCol + 1) : 0;
-			for (let r = hasBounds ? data.minRow : 0; r <= (hasBounds ? data.maxRow : 0); r++) {
-				try { repo.addCellChange('default', r, newColIndex, ''); } catch {}
-			}
+			const nextOrder = (() => {
+				if (sheet) {
+					const ids = sheet.structure.getColumnIds();
+					let max = -1;
+					ids.forEach(id => {
+						const meta = sheet.structure.getColumn(id);
+						if (meta && typeof meta.order === 'number') {
+							max = Math.max(max, meta.order);
+						}
+					});
+					if (max >= 0) return max + 1;
+				}
+				return (data.maxCol >= data.minCol) ? data.maxCol + 1 : 0;
+			})();
+			const colId = `col_${generateId('')}`;
+			const col = createColumn(colId, { order: nextOrder });
+			try {
+				repo.addColumn(activeSheet, col);
+			} catch (e) { console.warn(e); }
 			refreshAll();
 		};
 	}
@@ -320,23 +507,141 @@ function bindActions() {
 	if (btnInsertRow) {
 		btnInsertRow.onclick = () => {
 			if (!repo) return;
-			const tree = repo.getWorkingTree();
-			const order = tree ? tree.structure.getRowIds().length : 0;
-			const row = createRow({ order });
-			try {
-				repo.addRow('default', row); // 暂存结构变更
-			} catch (e) { console.warn(e); }
-
-			// 为新行追加占位单元格，让可视矩阵立即扩展
-			const adapter = new TableDataAdapter(repo);
+			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+			const adapter = new TableDataAdapter(repo, activeSheet);
 			const data = adapter.build();
-			const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
-			const newRowIndex = hasBounds ? (data.maxRow + 1) : 0;
-			for (let c = hasBounds ? data.minCol : 0; c <= (hasBounds ? data.maxCol : 0); c++) {
-				try { repo.addCellChange('default', newRowIndex, c, ''); } catch {}
-			}
+			const nextOrder = (() => {
+				if (sheet) {
+					const ids = sheet.structure.getRowIds();
+					let max = -1;
+					ids.forEach(id => {
+						const meta = sheet.structure.getRow(id);
+						if (meta && typeof meta.order === 'number') {
+							max = Math.max(max, meta.order);
+						}
+					});
+					if (max >= 0) return max + 1;
+				}
+				return (data.maxRow >= data.minRow) ? data.maxRow + 1 : 0;
+			})();
+			const row = createRow({ order: nextOrder });
+			try {
+				repo.addRow(activeSheet, row);
+			} catch (e) { console.warn(e); }
 			refreshAll();
 		};
+	}
+
+	// === 根据索引删除列（依赖结构顺序） ===
+	const btnDeleteColByIndex = document.getElementById('btn-delete-col-index') as HTMLButtonElement | null;
+	if (btnDeleteColByIndex) {
+		btnDeleteColByIndex.onclick = () => {
+			if (!repo) return;
+			const input = document.getElementById('col-index') as HTMLInputElement | null;
+			const raw = input?.value.trim();
+			if (!raw?.length) { alert('请输入列索引'); return; }
+			const colIndex = Number(raw);
+			if (!Number.isInteger(colIndex) || colIndex < 0) { alert('列索引需为非负整数'); return; }
+
+			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+			if (!sheet) { alert('当前工作表为空'); return; }
+
+			// 如果当前没有列结构，则尝试基于现有单元格边界自动补齐列结构
+			let structIds = sheet.structure.getColumnIds();
+			if (structIds.length === 0) {
+				const bounds = sheet.getBounds?.();
+				if (bounds) {
+					for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
+						// 生成稳定列ID：优先使用已有列元数据（无），否则统一前缀
+						repo.addColumn(activeSheet, createColumn(`auto_col_${c}`, { order: c }));
+					}
+					// 重新获取最新 sheet 结构（包含刚刚暂存的列添加）
+					const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+					if (refreshed) {
+						structIds = refreshed.structure.getColumnIds();
+					}
+				}
+			}
+
+			if (colIndex >= structIds.length) { alert('结构列索引不存在，请检查列顺序。'); return; }
+			const targetId = structIds[colIndex];
+			if (!targetId) { alert('未找到对应列 ID。'); return; }
+
+			try {
+				repo.deleteColumn(activeSheet, targetId);
+			} catch (e) { console.warn(e); }
+
+			if (input) input.value = '';
+			refreshAll();
+		};
+	}
+
+	// === 根据索引删除行（依赖结构顺序） ===
+	const btnDeleteRowByIndex = document.getElementById('btn-delete-row-index') as HTMLButtonElement | null;
+	if (btnDeleteRowByIndex) {
+		btnDeleteRowByIndex.onclick = () => {
+			if (!repo) return;
+			const input = document.getElementById('row-index') as HTMLInputElement | null;
+			const raw = input?.value.trim();
+			if (!raw?.length) { alert('请输入行索引'); return; }
+			const rowIndex = Number(raw);
+			if (!Number.isInteger(rowIndex) || rowIndex < 0) { alert('行索引需为非负整数'); return; }
+
+			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+			if (!sheet) { alert('当前工作表为空'); return; }
+
+			// 如果当前没有行结构，则尝试基于现有单元格边界自动补齐行结构
+			let structIds = sheet.structure.getRowIds();
+			if (structIds.length === 0) {
+				const bounds = sheet.getBounds?.();
+				if (bounds) {
+					for (let r = bounds.minRow; r <= bounds.maxRow; r++) {
+						repo.addRow(activeSheet, createRow({ order: r, id: `auto_row_${r}` }));
+					}
+					const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+					if (refreshed) {
+						structIds = refreshed.structure.getRowIds();
+					}
+				}
+			}
+
+			if (rowIndex >= structIds.length) { alert('结构行索引不存在，请检查行顺序。'); return; }
+			const targetId = structIds[rowIndex];
+			if (!targetId) { alert('未找到对应行 ID。'); return; }
+
+			try {
+				repo.deleteRow(activeSheet, targetId);
+			} catch (e) { console.warn(e); }
+
+			if (input) input.value = '';
+			refreshAll();
+		};
+	}
+}
+
+function seedDemoSheets() {
+	if (!repo) return;
+	if (!repo.hasSheet('analysis')) {
+		repo.createSheet('analysis', { order: 1 });
+		// 初始化行结构（0~3），与即将写入的单元格对应
+		repo.addRow('analysis', createRow({ id: 'row_0', order: 0 }));
+		repo.addRow('analysis', createRow({ id: 'row_1', order: 1 }));
+		repo.addRow('analysis', createRow({ id: 'row_2', order: 2 }));
+		repo.addRow('analysis', createRow({ id: 'row_3', order: 3 }));
+		repo.addCellChange('analysis', 0, 0, '指标', undefined, { fontWeight: 'bold' });
+		repo.addCellChange('analysis', 0, 1, '数值', undefined, { fontWeight: 'bold' });
+		repo.addCellChange('analysis', 1, 0, '产品数量');
+		repo.addCellChange('analysis', 1, 1, 3);
+		repo.addCellChange('analysis', 2, 0, '平均价格');
+		repo.addCellChange('analysis', 2, 1, 8185.67);
+		repo.addCellChange('analysis', 3, 0, '库存总量');
+		repo.addCellChange('analysis', 3, 1, 225);
+		repo.commit('新增分析工作表', 'System', 'system@example.com');
+	}
+	const sheets = repo.listSheets();
+	if (!sheets.includes('draft')) {
+		repo.duplicateSheet('default', 'draft');
+		repo.commit('复制默认工作表', 'System', 'system@example.com');
 	}
 }
 
@@ -345,8 +650,11 @@ function main() {
 	bindActions();
 	// 自动初始化一次
 	repo = createSampleTable();
+	seedDemoSheets();
+	activeSheet = 'default';
 	refreshAll();
 }
+
 
 document.addEventListener('DOMContentLoaded', main);
 

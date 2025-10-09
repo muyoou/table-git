@@ -1,3 +1,4 @@
+// build-version:1760025145450
 "use strict";
 (() => {
   var __create = Object.create;
@@ -527,8 +528,34 @@
 
   // src/utils/hash.ts
   var import_js_sha1 = __toESM(require_sha1());
+  function normalize(value) {
+    if (value === null || value === void 0) {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => normalize(item));
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    if (typeof value === "object") {
+      if (value instanceof Map) {
+        const entries = Array.from(value.entries()).map(([key, val]) => [key, normalize(val)]);
+        entries.sort(([a], [b]) => a > b ? 1 : a < b ? -1 : 0);
+        return entries;
+      }
+      const sortedKeys = Object.keys(value).sort();
+      const result = {};
+      for (const key of sortedKeys) {
+        result[key] = normalize(value[key]);
+      }
+      return result;
+    }
+    return value;
+  }
   function calculateHash(obj) {
-    const content = JSON.stringify(obj, Object.keys(obj).sort());
+    const normalized = normalize(obj);
+    const content = JSON.stringify(normalized);
     return (0, import_js_sha1.default)(content);
   }
   function generateId(prefix = "") {
@@ -958,6 +985,13 @@
       return cloned;
     }
     /**
+     * 重命名工作表
+     */
+    rename(newName) {
+      this.name = newName;
+      this.updateHash();
+    }
+    /**
      * 转换为JSON
      */
     toJSON() {
@@ -978,6 +1012,159 @@
       sheet.structure = TableStructure.fromJSON(json.structure);
       sheet.updateHash();
       return sheet;
+    }
+  };
+
+  // src/core/table-tree.ts
+  var TableTree = class _TableTree {
+    constructor(entries) {
+      this.type = "table" /* TABLE */;
+      this.sheetMap = /* @__PURE__ */ new Map();
+      this.sheetOrder = [];
+      if (entries) {
+        entries.forEach((entry) => {
+          this.sheetMap.set(entry.name, deepClone(entry));
+          this.sheetOrder.push(entry.name);
+        });
+      }
+      this.hash = this.calculateHash();
+    }
+    /**
+     * 新增或更新工作表
+     */
+    upsertSheet(name, hash, options) {
+      const existing = this.sheetMap.get(name);
+      const order = options?.order ?? existing?.order ?? this.sheetOrder.length;
+      const entry = {
+        name,
+        hash,
+        order,
+        meta: options?.meta ? deepClone(options.meta) : existing?.meta ? deepClone(existing.meta) : void 0
+      };
+      this.sheetMap.set(name, entry);
+      if (!existing) {
+        this.sheetOrder.push(name);
+      }
+      this.normalizeOrder();
+      this.updateHash();
+    }
+    /**
+     * 获取工作表哈希
+     */
+    getSheetHash(name) {
+      return this.sheetMap.get(name)?.hash;
+    }
+    /**
+     * 判断工作表是否存在
+     */
+    hasSheet(name) {
+      return this.sheetMap.has(name);
+    }
+    /**
+     * 删除工作表
+     */
+    removeSheet(name) {
+      const removed = this.sheetMap.delete(name);
+      if (removed) {
+        this.sheetOrder = this.sheetOrder.filter((sheet) => sheet !== name);
+        this.normalizeOrder();
+        this.updateHash();
+      }
+      return removed;
+    }
+    /**
+     * 重命名工作表
+     */
+    renameSheet(oldName, newName) {
+      if (!this.sheetMap.has(oldName) || this.sheetMap.has(newName)) {
+        return false;
+      }
+      const entry = this.sheetMap.get(oldName);
+      if (!entry) {
+        return false;
+      }
+      const newEntry = {
+        ...deepClone(entry),
+        name: newName
+      };
+      this.sheetMap.delete(oldName);
+      this.sheetMap.set(newName, newEntry);
+      this.sheetOrder = this.sheetOrder.map((sheet) => sheet === oldName ? newName : sheet);
+      this.updateHash();
+      return true;
+    }
+    /**
+     * 调整工作表顺序
+     */
+    moveSheet(name, newIndex) {
+      const currentIndex = this.sheetOrder.indexOf(name);
+      if (currentIndex === -1 || newIndex < 0 || newIndex >= this.sheetOrder.length) {
+        return false;
+      }
+      this.sheetOrder.splice(currentIndex, 1);
+      this.sheetOrder.splice(newIndex, 0, name);
+      this.normalizeOrder();
+      this.updateHash();
+      return true;
+    }
+    /**
+     * 获取所有工作表名称（按顺序）
+     */
+    getSheetNames() {
+      return [...this.sheetOrder];
+    }
+    /**
+     * 获取完整条目（用于内部操作）
+     */
+    getSheetEntries() {
+      return new Map(this.sheetMap);
+    }
+    /**
+     * 克隆表树
+     */
+    clone() {
+      return new _TableTree(this.sheetOrder.map((name) => deepClone(this.sheetMap.get(name))));
+    }
+    /**
+     * 序列化
+     */
+    toJSON() {
+      const entries = this.sheetOrder.map((name) => deepClone(this.sheetMap.get(name)));
+      return {
+        type: this.type,
+        sheets: entries,
+        hash: this.hash
+      };
+    }
+    /**
+     * 反序列化
+     */
+    static fromJSON(json) {
+      return new _TableTree(json.sheets);
+    }
+    normalizeOrder() {
+      this.sheetOrder = this.sheetOrder.filter((name) => this.sheetMap.has(name));
+      this.sheetOrder.forEach((name, index) => {
+        const entry = this.sheetMap.get(name);
+        if (entry) {
+          entry.order = index;
+        }
+      });
+    }
+    updateHash() {
+      this.hash = this.calculateHash();
+    }
+    calculateHash() {
+      const sortedEntries = this.sheetOrder.map((name) => this.sheetMap.get(name)).filter(Boolean);
+      return calculateHash({
+        type: this.type,
+        sheets: sortedEntries.map((entry) => ({
+          name: entry.name,
+          hash: entry.hash,
+          order: entry.order,
+          meta: entry.meta
+        }))
+      });
     }
   };
 
@@ -1059,40 +1246,158 @@ Date: ${date}`;
 
   // src/core/table-git.ts
   var TableGit = class {
-    // 工作区
+    // 提交对应的表快照
     constructor() {
       this.objects = /* @__PURE__ */ new Map();
       this.refs = /* @__PURE__ */ new Map();
       this.head = "main";
       this.index = /* @__PURE__ */ new Map();
-      this.workingTree = /* @__PURE__ */ new Map();
+      this.workingTable = null;
+      this.workingSheets = /* @__PURE__ */ new Map();
+      this.tableSnapshots = /* @__PURE__ */ new Map();
     }
     /**
      * 初始化仓库
      */
-    init(branchName = "main") {
+    init(branchName = "main", options) {
       this.head = branchName;
       this.refs.set(branchName, "");
-      const emptyTree = new SheetTree("default");
-      const treeHash = this.storeObject(emptyTree);
+      const table = new TableTree();
+      if (options?.createDefaultSheet ?? true) {
+        const sheetName = options?.defaultSheetName ?? "default";
+        const sheet = new SheetTree(sheetName);
+        const sheetHash = this.storeObject(sheet);
+        table.upsertSheet(sheetName, sheetHash, { order: 0 });
+      }
+      const tableHash = this.storeObject(table);
       const initialCommit = new CommitObject(
-        treeHash,
+        tableHash,
         "Initial commit",
         "System",
         "system@tablegit.com"
       );
       const commitHash = this.storeObject(initialCommit);
       this.refs.set(branchName, commitHash);
-      this.loadWorkingTree();
+      this.tableSnapshots.set(commitHash, table.clone());
+      this.loadWorkingState(table);
+    }
+    // ========== 工作表级操作 ==========
+    createSheet(sheetName, details) {
+      const table = this.getPreviewTable({ includeStaged: true }) ?? this.workingTable ?? new TableTree();
+      if (table.hasSheet(sheetName)) {
+        throw new Error(`Sheet '${sheetName}' already exists`);
+      }
+      const changeKey = `sheet:add:${sheetName}`;
+      this.index.set(changeKey, {
+        type: "sheet_add" /* SHEET_ADD */,
+        sheetName,
+        details: details ?? {},
+        timestamp: Date.now()
+      });
+    }
+    deleteSheet(sheetName) {
+      const table = this.getPreviewTable({ includeStaged: true }) ?? this.workingTable;
+      if (!table || !table.hasSheet(sheetName)) {
+        throw new Error(`Sheet '${sheetName}' does not exist`);
+      }
+      const changeKey = `sheet:delete:${sheetName}`;
+      this.index.set(changeKey, {
+        type: "sheet_delete" /* SHEET_DELETE */,
+        sheetName,
+        details: {},
+        timestamp: Date.now()
+      });
+    }
+    renameSheet(oldName, newName) {
+      if (oldName === newName) {
+        return;
+      }
+      const table = this.getPreviewTable({ includeStaged: true }) ?? this.workingTable;
+      if (!table || !table.hasSheet(oldName)) {
+        throw new Error(`Sheet '${oldName}' does not exist`);
+      }
+      if (table.hasSheet(newName)) {
+        throw new Error(`Sheet '${newName}' already exists`);
+      }
+      if (this.hasBlockingStagedChanges(oldName)) {
+        throw new Error(`Sheet '${oldName}' has staged changes. Commit or reset them before renaming.`);
+      }
+      const changeKey = `sheet:rename:${oldName}`;
+      this.index.set(changeKey, {
+        type: "sheet_rename" /* SHEET_RENAME */,
+        sheetName: oldName,
+        details: { newName },
+        timestamp: Date.now()
+      });
+    }
+    moveSheet(sheetName, newIndex) {
+      const table = this.getPreviewTable({ includeStaged: true }) ?? this.workingTable;
+      if (!table) {
+        throw new Error("No sheets available");
+      }
+      const sheetNames = table.getSheetNames();
+      const currentIndex = sheetNames.indexOf(sheetName);
+      if (currentIndex === -1) {
+        throw new Error(`Sheet '${sheetName}' does not exist`);
+      }
+      if (newIndex < 0 || newIndex >= sheetNames.length) {
+        throw new Error(`Invalid sheet index ${newIndex}`);
+      }
+      if (currentIndex === newIndex) {
+        return;
+      }
+      const changeKey = `sheet:move:${sheetName}`;
+      this.index.set(changeKey, {
+        type: "sheet_move" /* SHEET_MOVE */,
+        sheetName,
+        details: { newIndex },
+        timestamp: Date.now()
+      });
+    }
+    duplicateSheet(sourceSheet, newName, options) {
+      if (sourceSheet === newName) {
+        throw new Error("Source sheet and new sheet names must differ");
+      }
+      const table = this.getPreviewTable({ includeStaged: true }) ?? this.workingTable;
+      if (!table || !table.hasSheet(sourceSheet)) {
+        throw new Error(`Sheet '${sourceSheet}' does not exist`);
+      }
+      if (table.hasSheet(newName)) {
+        throw new Error(`Sheet '${newName}' already exists`);
+      }
+      const changeKey = `sheet:duplicate:${newName}`;
+      this.index.set(changeKey, {
+        type: "sheet_duplicate" /* SHEET_DUPLICATE */,
+        sheetName: newName,
+        details: {
+          sourceSheet,
+          newName,
+          order: options?.order,
+          meta: options?.meta
+        },
+        timestamp: Date.now()
+      });
+    }
+    listSheets(options) {
+      if (options?.includeStaged) {
+        const table = this.getPreviewTable({ includeStaged: true });
+        return table ? table.getSheetNames() : [];
+      }
+      return this.workingTable ? this.workingTable.getSheetNames() : [];
+    }
+    hasSheet(sheetName, options) {
+      if (options?.includeStaged) {
+        const table = this.getPreviewTable({ includeStaged: true });
+        return table ? table.hasSheet(sheetName) : false;
+      }
+      return this.workingTable ? this.workingTable.hasSheet(sheetName) : false;
     }
     // ========== 单元格操作 ==========
-    /**
-     * 添加或更新单元格
-     */
     addCellChange(sheetName, row, column, value, formula, format) {
+      this.ensureSheetExists(sheetName);
       const cell = new CellObject(row, column, value, formula, format);
       const changeKey = `${sheetName}:cell:${row},${column}`;
-      const baseSheet = this.workingTree.get(sheetName);
+      const baseSheet = this.workingSheets.get(sheetName);
       const baseHas = !!baseSheet?.getCellHash(row, column);
       const staged = this.index.get(changeKey);
       const type = !baseHas || staged?.type === "cell_add" /* CELL_ADD */ || staged?.type === "cell_delete" /* CELL_DELETE */ ? "cell_add" /* CELL_ADD */ : "cell_update" /* CELL_UPDATE */;
@@ -1103,10 +1408,8 @@ Date: ${date}`;
         timestamp: Date.now()
       });
     }
-    /**
-     * 删除单元格
-     */
     deleteCellChange(sheetName, row, column) {
+      this.ensureSheetExists(sheetName);
       const changeKey = `${sheetName}:cell:${row},${column}`;
       this.index.set(changeKey, {
         type: "cell_delete" /* CELL_DELETE */,
@@ -1116,10 +1419,8 @@ Date: ${date}`;
       });
     }
     // ========== 列操作 ==========
-    /**
-     * 添加列
-     */
     addColumn(sheetName, column) {
+      this.ensureSheetExists(sheetName);
       const changeKey = `${sheetName}:column:add:${column.id}`;
       this.index.set(changeKey, {
         type: "column_add" /* COLUMN_ADD */,
@@ -1128,10 +1429,8 @@ Date: ${date}`;
         timestamp: Date.now()
       });
     }
-    /**
-     * 更新列信息
-     */
     updateColumn(sheetName, columnId, updates) {
+      this.ensureSheetExists(sheetName);
       const changeKey = `${sheetName}:column:update:${columnId}`;
       this.index.set(changeKey, {
         type: "column_update" /* COLUMN_UPDATE */,
@@ -1140,10 +1439,8 @@ Date: ${date}`;
         timestamp: Date.now()
       });
     }
-    /**
-     * 删除列
-     */
     deleteColumn(sheetName, columnId) {
+      this.ensureSheetExists(sheetName);
       const changeKey = `${sheetName}:column:delete:${columnId}`;
       this.index.set(changeKey, {
         type: "column_delete" /* COLUMN_DELETE */,
@@ -1152,23 +1449,9 @@ Date: ${date}`;
         timestamp: Date.now()
       });
     }
-    /**
-     * 移动列位置
-     */
-    moveColumn(sheetName, columnId, newIndex) {
-      const changeKey = `${sheetName}:column:move:${columnId}`;
-      this.index.set(changeKey, {
-        type: "column_move" /* COLUMN_MOVE */,
-        sheetName,
-        details: { columnId, newIndex },
-        timestamp: Date.now()
-      });
-    }
     // ========== 行操作 ==========
-    /**
-     * 添加行
-     */
     addRow(sheetName, row) {
+      this.ensureSheetExists(sheetName);
       const changeKey = `${sheetName}:row:add:${row.id}`;
       this.index.set(changeKey, {
         type: "row_add" /* ROW_ADD */,
@@ -1177,10 +1460,8 @@ Date: ${date}`;
         timestamp: Date.now()
       });
     }
-    /**
-     * 删除行
-     */
     deleteRow(sheetName, rowId) {
+      this.ensureSheetExists(sheetName);
       const changeKey = `${sheetName}:row:delete:${rowId}`;
       this.index.set(changeKey, {
         type: "row_delete" /* ROW_DELETE */,
@@ -1189,10 +1470,8 @@ Date: ${date}`;
         timestamp: Date.now()
       });
     }
-    /**
-     * 排序行
-     */
     sortRows(sheetName, sortCriteria) {
+      this.ensureSheetExists(sheetName);
       const changeKey = `${sheetName}:row:sort:${Date.now()}`;
       this.index.set(changeKey, {
         type: "row_sort" /* ROW_SORT */,
@@ -1202,18 +1481,14 @@ Date: ${date}`;
       });
     }
     // ========== 版本控制核心操作 ==========
-    /**
-     * 提交变更
-     */
     commit(message, author, email) {
       if (this.index.size === 0) {
         throw new Error("Nothing to commit");
       }
-      const newTree = this.buildTreeFromIndex();
-      const treeHash = this.storeObject(newTree);
+      const { table, tableHash, sheets } = this.buildTableFromIndex();
       const currentCommitHash = this.refs.get(this.head);
       const commit = new CommitObject(
-        treeHash,
+        tableHash,
         message,
         author,
         email,
@@ -1221,88 +1496,231 @@ Date: ${date}`;
       );
       const commitHash = this.storeObject(commit);
       this.refs.set(this.head, commitHash);
+      this.tableSnapshots.set(commitHash, table.clone());
       this.index.clear();
-      this.loadWorkingTree();
+      this.loadWorkingState(table, sheets);
       return commitHash;
     }
-    /**
-     * 从暂存区构建树对象
-     */
-    buildTreeFromIndex() {
-      let sheet = this.workingTree.get("default")?.clone() || new SheetTree("default");
-      for (const [key, change] of this.index) {
-        this.applyChange(sheet, change);
+    buildTableFromIndex() {
+      const table = this.workingTable ? this.workingTable.clone() : new TableTree();
+      const sheets = /* @__PURE__ */ new Map();
+      if (this.workingTable) {
+        for (const name of this.workingTable.getSheetNames()) {
+          const workingSheet = this.workingSheets.get(name);
+          if (workingSheet) {
+            sheets.set(name, workingSheet.clone());
+            continue;
+          }
+          const sheetHash = this.workingTable.getSheetHash(name);
+          if (!sheetHash) continue;
+          const storedSheet = this.getObject(sheetHash);
+          if (storedSheet) {
+            sheets.set(name, storedSheet.clone());
+          }
+        }
       }
-      return sheet;
+      for (const change of this.index.values()) {
+        this.applyChange(table, sheets, change);
+      }
+      for (const [name, sheet] of sheets) {
+        const sheetHash = this.storeObject(sheet);
+        table.upsertSheet(name, sheetHash);
+      }
+      const tableHash = this.storeObject(table);
+      return { table, tableHash, sheets };
     }
-    /**
-     * 应用单个变更
-     */
-    applyChange(sheet, change) {
+    applyChange(table, sheets, change) {
       switch (change.type) {
-        case "cell_update" /* CELL_UPDATE */:
+        case "sheet_add" /* SHEET_ADD */: {
+          const details = change.details;
+          const newSheet = new SheetTree(change.sheetName);
+          sheets.set(change.sheetName, newSheet);
+          table.upsertSheet(change.sheetName, newSheet.hash, { order: details?.order, meta: details?.meta });
+          break;
+        }
+        case "sheet_delete" /* SHEET_DELETE */: {
+          sheets.delete(change.sheetName);
+          table.removeSheet(change.sheetName);
+          break;
+        }
+        case "sheet_rename" /* SHEET_RENAME */: {
+          const details = change.details;
+          if (!details?.newName) {
+            break;
+          }
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
+          sheet.rename(details.newName);
+          sheets.delete(change.sheetName);
+          sheets.set(details.newName, sheet);
+          table.renameSheet(change.sheetName, details.newName);
+          break;
+        }
+        case "sheet_move" /* SHEET_MOVE */: {
+          const details = change.details;
+          if (typeof details?.newIndex === "number") {
+            table.moveSheet(change.sheetName, details.newIndex);
+          }
+          break;
+        }
+        case "sheet_duplicate" /* SHEET_DUPLICATE */: {
+          const details = change.details;
+          if (!details?.sourceSheet || !details?.newName) {
+            break;
+          }
+          const sourceSheet = this.getMutableSheet(table, sheets, details.sourceSheet).clone();
+          sourceSheet.rename(details.newName);
+          sheets.set(details.newName, sourceSheet);
+          table.upsertSheet(details.newName, sourceSheet.hash, { order: details.order, meta: details.meta });
+          break;
+        }
         case "cell_add" /* CELL_ADD */:
+        case "cell_update" /* CELL_UPDATE */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
           const cell = change.details;
           const cellHash = this.storeObject(cell);
           sheet.setCellHash(cell.row, cell.column, cellHash);
           break;
-        case "cell_delete" /* CELL_DELETE */:
+        }
+        case "cell_delete" /* CELL_DELETE */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
           const { row, column } = change.details;
           sheet.deleteCell(row, column);
           break;
-        case "column_add" /* COLUMN_ADD */:
+        }
+        case "column_add" /* COLUMN_ADD */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
           sheet.structure.addColumn(change.details);
           break;
-        case "column_update" /* COLUMN_UPDATE */:
+        }
+        case "column_update" /* COLUMN_UPDATE */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
           const { columnId, updates } = change.details;
           sheet.structure.updateColumn(columnId, updates);
           break;
-        case "column_delete" /* COLUMN_DELETE */:
-          sheet.structure.removeColumn(change.details.columnId);
+        }
+        case "column_delete" /* COLUMN_DELETE */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
+          const columnId = change.details.columnId;
+          const column = sheet.structure.getColumn(columnId);
+          if (column && typeof column.order === "number") {
+            const columnIndex = column.order;
+            const cells = sheet.getAllCellPositions();
+            for (const { row, col } of cells) {
+              if (col === columnIndex) {
+                sheet.deleteCell(row, col);
+              }
+            }
+          }
+          sheet.structure.removeColumn(columnId);
           break;
-        case "column_move" /* COLUMN_MOVE */:
+        }
+        case "column_move" /* COLUMN_MOVE */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
           sheet.structure.moveColumn(change.details.columnId, change.details.newIndex);
           break;
-        case "row_add" /* ROW_ADD */:
+        }
+        case "row_add" /* ROW_ADD */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
           sheet.structure.addRow(change.details);
           break;
-        case "row_delete" /* ROW_DELETE */:
-          sheet.structure.removeRow(change.details.rowId);
+        }
+        case "row_delete" /* ROW_DELETE */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
+          const rowId = change.details.rowId;
+          const row = sheet.structure.getRow(rowId);
+          if (row && typeof row.order === "number") {
+            const rowIndex = row.order;
+            const cells = sheet.getAllCellPositions();
+            for (const { row: r, col } of cells) {
+              if (r === rowIndex) {
+                sheet.deleteCell(r, col);
+              }
+            }
+          }
+          sheet.structure.removeRow(rowId);
           break;
-        case "row_sort" /* ROW_SORT */:
+        }
+        case "row_sort" /* ROW_SORT */: {
+          const sheet = this.getMutableSheet(table, sheets, change.sheetName);
           const { sortCriteria } = change.details;
           this.applySorting(sheet, sortCriteria);
           break;
+        }
+        default:
+          break;
       }
     }
-    /**
-     * 应用排序
-     */
+    getMutableSheet(table, sheets, sheetName) {
+      let sheet = sheets.get(sheetName);
+      if (sheet) {
+        return sheet;
+      }
+      if (!table.hasSheet(sheetName)) {
+        throw new Error(`Sheet '${sheetName}' does not exist`);
+      }
+      const sheetHash = table.getSheetHash(sheetName);
+      if (!sheetHash) {
+        throw new Error(`Snapshot for sheet '${sheetName}' is missing`);
+      }
+      const storedSheet = this.getObject(sheetHash);
+      if (!storedSheet) {
+        throw new Error(`Stored sheet '${sheetName}' cannot be found`);
+      }
+      sheet = storedSheet.clone();
+      sheets.set(sheetName, sheet);
+      return sheet;
+    }
     applySorting(sheet, criteria) {
       const currentOrder = sheet.structure.getRowIds();
-      const sortedOrder = [...currentOrder].sort((a, b) => {
-        return a.localeCompare(b);
-      });
+      const sortedOrder = [...currentOrder].sort((a, b) => a.localeCompare(b));
       sheet.structure.sortRows(sortedOrder);
     }
     // ========== 对象存储 ==========
-    /**
-     * 存储对象
-     */
     storeObject(obj) {
       const hash = obj.hash;
-      this.objects.set(hash, obj);
+      if (obj instanceof SheetTree) {
+        this.objects.set(hash, { type: "sheet" /* SHEET */, payload: obj.toJSON() });
+        return hash;
+      }
+      if (obj instanceof TableTree) {
+        this.objects.set(hash, { type: "table" /* TABLE */, payload: obj.toJSON() });
+        return hash;
+      }
+      if (obj instanceof CellObject) {
+        const clonedCell = new CellObject(obj.row, obj.column, obj.value, obj.formula, obj.format);
+        this.objects.set(hash, { type: "cell" /* CELL */, payload: obj.toJSON() });
+        return hash;
+      }
+      if (obj instanceof CommitObject) {
+        this.objects.set(hash, { type: "commit" /* COMMIT */, payload: obj.toJSON() });
+        return hash;
+      }
+      this.objects.set(hash, { type: obj.type ?? "raw", payload: obj });
       return hash;
     }
-    /**
-     * 获取对象
-     */
     getObject(hash) {
-      return this.objects.get(hash);
+      const entry = this.objects.get(hash);
+      if (!entry) {
+        return void 0;
+      }
+      if (entry instanceof SheetTree || entry instanceof TableTree || entry instanceof CellObject || entry instanceof CommitObject) {
+        return entry;
+      }
+      if (entry.type === "sheet" /* SHEET */) {
+        return SheetTree.fromJSON(entry.payload);
+      }
+      if (entry.type === "table" /* TABLE */) {
+        return TableTree.fromJSON(entry.payload);
+      }
+      if (entry.type === "cell" /* CELL */) {
+        return CellObject.fromJSON(entry.payload);
+      }
+      if (entry.type === "commit" /* COMMIT */) {
+        return CommitObject.fromJSON(entry.payload);
+      }
+      return entry.payload;
     }
-    /**
-     * 获取指定引用（分支或提交）对应的工作表快照，而不改变当前工作区
-     */
+    // ========== 快照 ==========
     getTreeSnapshot(ref) {
       let commitHash;
       if (ref?.commit) {
@@ -1313,34 +1731,45 @@ Date: ${date}`;
         commitHash = this.refs.get(this.head) || (this.isDetachedHead() ? this.head : void 0);
       }
       if (!commitHash) return void 0;
-      const commit = this.getObject(commitHash);
-      if (!commit) return void 0;
-      const tree = this.getObject(commit.tree);
-      return tree ? tree.clone() : void 0;
+      const snapshot = commitHash ? this.tableSnapshots.get(commitHash) : void 0;
+      if (snapshot) {
+        return snapshot.clone();
+      }
+      const commitObj = this.getObject(commitHash);
+      if (!commitObj) return void 0;
+      const table = this.getObject(commitObj.tree);
+      return table ? table.clone() : void 0;
     }
-    /**
-     * 从指定的 SheetTree 快照读取单元格对象
-     */
-    getCellFromTree(tree, row, col) {
+    getSheetSnapshot(sheetName, ref) {
+      const table = this.getTreeSnapshot(ref);
+      if (!table) return void 0;
+      const sheetHash = table.getSheetHash(sheetName);
+      if (!sheetHash) return void 0;
+      const sheet = this.getObject(sheetHash);
+      return sheet ? sheet.clone() : void 0;
+    }
+    getCellFromTree(tree, row, col, sheetName = "default") {
+      if (tree instanceof TableTree) {
+        const sheetHash = tree.getSheetHash(sheetName);
+        if (!sheetHash) return void 0;
+        const sheet = this.getObject(sheetHash);
+        if (!sheet) return void 0;
+        const cellHash = sheet.getCellHash(row, col);
+        if (!cellHash) return void 0;
+        return this.getObject(cellHash);
+      }
       const hash = tree.getCellHash(row, col);
       if (!hash) return void 0;
       return this.getObject(hash);
     }
     // ========== 分支操作 ==========
-    /**
-     * 创建分支
-     */
     createBranch(branchName) {
       const currentCommitHash = this.refs.get(this.head);
-      if (currentCommitHash) {
-        this.refs.set(branchName, currentCommitHash);
-      } else {
+      if (!currentCommitHash) {
         throw new Error("Cannot create branch: no commits found");
       }
+      this.refs.set(branchName, currentCommitHash);
     }
-    /**
-     * 切换分支或提交
-     */
     checkout(target) {
       if (this.index.size > 0) {
         throw new Error("Cannot checkout: you have unstaged changes");
@@ -1358,64 +1787,51 @@ Date: ${date}`;
       }
       throw new Error(`Branch or commit '${target}' does not exist`);
     }
-    /**
-     * 从指定提交加载工作区
-     */
     loadWorkingTreeFromCommit(commitHash) {
-      const commit = this.getObject(commitHash);
-      if (commit) {
-        const tree = this.getObject(commit.tree);
-        if (tree) {
-          this.workingTree.set("default", tree.clone());
-        }
+      const snapshot = this.tableSnapshots.get(commitHash);
+      if (snapshot) {
+        this.loadWorkingState(snapshot.clone());
+        return;
       }
+      const commitObj = this.getObject(commitHash);
+      if (!commitObj) {
+        this.workingTable = null;
+        this.workingSheets = /* @__PURE__ */ new Map();
+        return;
+      }
+      const table = this.getObject(commitObj.tree);
+      if (!table) {
+        this.workingTable = null;
+        this.workingSheets = /* @__PURE__ */ new Map();
+        return;
+      }
+      this.loadWorkingState(table);
     }
-    /**
-     * 获取当前分支
-     */
     getCurrentBranch() {
       return this.head;
     }
-    /**
-     * 检查当前是否处于分离HEAD状态
-     */
     isDetachedHead() {
       return !this.refs.has(this.head);
     }
-    /**
-     * 获取当前HEAD指向的提交哈希
-     */
     getCurrentCommitHash() {
       if (this.isDetachedHead()) {
         return this.head;
       }
       return this.refs.get(this.head);
     }
-    /**
-     * 获取所有分支
-     */
     getBranches() {
       return Array.from(this.refs.keys());
     }
-    /**
-     * 加载工作区
-     */
     loadWorkingTree() {
       const commitHash = this.refs.get(this.head);
-      if (commitHash) {
-        const commit = this.getObject(commitHash);
-        if (commit) {
-          const tree = this.getObject(commit.tree);
-          if (tree) {
-            this.workingTree.set("default", tree.clone());
-          }
-        }
+      if (!commitHash) {
+        this.workingTable = null;
+        this.workingSheets = /* @__PURE__ */ new Map();
+        return;
       }
+      this.loadWorkingTreeFromCommit(commitHash);
     }
     // ========== 状态查询 ==========
-    /**
-     * 获取当前状态
-     */
     status() {
       const lastCommitHash = this.refs.get(this.head);
       return {
@@ -1424,70 +1840,102 @@ Date: ${date}`;
         lastCommit: lastCommitHash ? this.getObject(lastCommitHash)?.getShortHash() : void 0
       };
     }
-    /**
-     * 获取暂存区变更
-     */
     getStagedChanges() {
       return Array.from(this.index.values());
     }
-    /**
-     * 重置暂存区
-     */
     reset() {
       this.index.clear();
     }
-    /**
-     * 获取提交历史
-     */
     getCommitHistory(limit = 10) {
       const history = [];
       let currentHash = this.refs.get(this.head);
       while (currentHash && history.length < limit) {
         const commit = this.getObject(currentHash);
-        if (!commit) break;
+        if (!commit) {
+          break;
+        }
         history.push(commit);
         currentHash = commit.parent;
       }
       return history;
     }
-    /**
-     * 获取工作区内容
-     */
-    getWorkingTree() {
-      return this.workingTree.get("default");
+    getWorkingTable() {
+      return this.workingTable ? this.workingTable.clone() : void 0;
     }
-    /**
-     * 获取预览用的工作区树
-     * - includeStaged=true 时，返回在当前工作区基础上应用暂存区变更后的临时树（不提交）
-     * - 否则，返回当前工作区的克隆
-     */
-    getPreviewTree(options) {
-      if (options?.includeStaged) {
-        return this.buildTreeFromIndex();
-      }
-      const sheet = this.getWorkingTree();
+    getWorkingSheet(sheetName) {
+      const sheet = this.workingSheets.get(sheetName);
       return sheet ? sheet.clone() : void 0;
     }
-    /**
-     * 获取单元格值
-     */
-    getCellValue(row, col) {
-      const sheet = this.workingTree.get("default");
+    getWorkingTree() {
+      return this.getWorkingSheet("default");
+    }
+    getPreviewTable(options) {
+      if (options?.includeStaged) {
+        const { table } = this.buildTableFromIndex();
+        return table.clone();
+      }
+      return this.getWorkingTable();
+    }
+    getPreviewSheet(sheetName, options) {
+      if (options?.includeStaged) {
+        const { sheets } = this.buildTableFromIndex();
+        const sheet = sheets.get(sheetName);
+        return sheet ? sheet.clone() : void 0;
+      }
+      return this.getWorkingSheet(sheetName);
+    }
+    getPreviewTree(options) {
+      return this.getPreviewSheet("default", options);
+    }
+    getCellValue(row, col, sheetName = "default") {
+      const sheet = this.workingSheets.get(sheetName);
       if (!sheet) return void 0;
       const cellHash = sheet.getCellHash(row, col);
       if (!cellHash) return void 0;
       const cell = this.getObject(cellHash);
       return cell?.value;
     }
-    /**
-     * 获取单元格对象
-     */
-    getCell(row, col) {
-      const sheet = this.workingTree.get("default");
+    getCell(row, col, sheetName = "default") {
+      const sheet = this.workingSheets.get(sheetName);
       if (!sheet) return void 0;
       const cellHash = sheet.getCellHash(row, col);
       if (!cellHash) return void 0;
       return this.getObject(cellHash);
+    }
+    // ========== 内部工具 ==========
+    loadWorkingState(table, sheetOverrides) {
+      this.workingTable = table.clone();
+      this.workingSheets = /* @__PURE__ */ new Map();
+      for (const name of this.workingTable.getSheetNames()) {
+        if (sheetOverrides?.has(name)) {
+          this.workingSheets.set(name, sheetOverrides.get(name).clone());
+          continue;
+        }
+        const sheetHash = this.workingTable.getSheetHash(name);
+        if (!sheetHash) {
+          continue;
+        }
+        const sheet = this.getObject(sheetHash);
+        if (sheet) {
+          this.workingSheets.set(name, sheet.clone());
+        }
+      }
+    }
+    ensureSheetExists(sheetName) {
+      if (this.hasSheet(sheetName, { includeStaged: true })) {
+        return;
+      }
+      throw new Error(`Sheet '${sheetName}' does not exist. Create it before modifying content.`);
+    }
+    hasBlockingStagedChanges(sheetName) {
+      for (const change of this.index.values()) {
+        if (change.sheetName !== sheetName) continue;
+        if (change.type === "sheet_move" /* SHEET_MOVE */ || change.type === "sheet_rename" /* SHEET_RENAME */) {
+          continue;
+        }
+        return true;
+      }
+      return false;
     }
   };
 
@@ -1543,6 +1991,9 @@ Date: ${date}`;
       })
     ];
     columns.forEach((col) => repo2.addColumn("default", col));
+    for (let r = 0; r <= 3; r++) {
+      repo2.addRow("default", createRow({ id: `row_${r}`, order: r }));
+    }
     repo2.addCellChange("default", 0, 0, "\u4EA7\u54C1\u540D\u79F0", void 0, { fontWeight: "bold" });
     repo2.addCellChange("default", 0, 1, "\u4EF7\u683C", void 0, { fontWeight: "bold" });
     repo2.addCellChange("default", 0, 2, "\u5E93\u5B58", void 0, { fontWeight: "bold" });
@@ -1574,32 +2025,79 @@ Date: ${date}`;
      * @param source 可选：从其他分支或指定提交预览（不需要 checkout）
      */
     build(source) {
-      const sheet = source ? this.repo.getTreeSnapshot(source) : this.repo.getPreviewTree({ includeStaged: true });
+      const sheet = source ? this.repo.getSheetSnapshot(this.sheetName, source) : this.repo.getPreviewSheet(this.sheetName, { includeStaged: true });
       if (!sheet) {
-        return { header: [], rows: [], matrix: [], minRow: 0, minCol: 0, maxRow: -1, maxCol: -1 };
+        return this.empty();
       }
-      const bounds = sheet.getBounds();
-      if (!bounds) {
-        return { header: [], rows: [], matrix: [], minRow: 0, minCol: 0, maxRow: -1, maxCol: -1 };
+      const structure = sheet.structure;
+      const columnEntries = this.getOrderedEntries(structure.getColumnIds(), (id) => structure.getColumn(id));
+      const rowEntries = this.getOrderedEntries(structure.getRowIds(), (id) => structure.getRow(id));
+      const useStructureColumns = columnEntries.length > 0;
+      const useStructureRows = rowEntries.length > 0;
+      let minRow = Number.POSITIVE_INFINITY;
+      let maxRow = Number.NEGATIVE_INFINITY;
+      let minCol = Number.POSITIVE_INFINITY;
+      let maxCol = Number.NEGATIVE_INFINITY;
+      const orderedCols = useStructureColumns ? columnEntries : this.buildFallbackEntries(sheet, "col");
+      const orderedRows = useStructureRows ? rowEntries : this.buildFallbackEntries(sheet, "row");
+      if (!orderedCols.length || !orderedRows.length) {
+        return this.empty();
       }
-      const { minRow, minCol, maxRow, maxCol } = bounds;
       const matrix = [];
-      for (let r = minRow; r <= maxRow; r++) {
+      orderedRows.forEach((rowEntry, rowIndex) => {
         const row = [];
-        for (let c = minCol; c <= maxCol; c++) {
-          const hash = sheet.getCellHash(r, c);
+        const rowPos = rowEntry.order;
+        minRow = Math.min(minRow, rowPos);
+        maxRow = Math.max(maxRow, rowPos);
+        orderedCols.forEach((colEntry) => {
+          const colPos = colEntry.order;
+          minCol = Math.min(minCol, colPos);
+          maxCol = Math.max(maxCol, colPos);
+          const hash = sheet.getCellHash(rowPos, colPos);
           if (!hash) {
             row.push(void 0);
-          } else {
-            const cell = this.repo.getCellFromTree(sheet, r, c);
-            row.push(cell ? cell.value : void 0);
+            return;
           }
-        }
-        matrix.push(row);
+          const cell = this.repo.getCellFromTree(sheet, rowPos, colPos);
+          row.push(cell ? cell.value : void 0);
+        });
+        matrix[rowIndex] = row;
+      });
+      if (!Number.isFinite(minRow) || !Number.isFinite(minCol)) {
+        return this.empty();
       }
       const header = minRow === 0 && matrix.length > 0 ? matrix[0] : [];
       const rows = minRow === 0 ? matrix.slice(1) : matrix;
       return { header, rows, matrix, minRow, minCol, maxRow, maxCol };
+    }
+    empty() {
+      return { header: [], rows: [], matrix: [], minRow: 0, minCol: 0, maxRow: -1, maxCol: -1 };
+    }
+    getOrderedEntries(ids, resolver) {
+      return ids.map((id, index) => {
+        const meta = resolver(id);
+        if (!meta || typeof meta.order !== "number") {
+          return null;
+        }
+        return { id, meta, order: meta.order ?? index };
+      }).filter((entry) => entry !== null).sort((a, b) => a.order - b.order);
+    }
+    buildFallbackEntries(sheet, axis) {
+      const bounds = sheet.getBounds();
+      if (!bounds) return [];
+      const { minRow, minCol, maxRow, maxCol } = bounds;
+      if (axis === "row") {
+        const entries2 = [];
+        for (let r = minRow; r <= maxRow; r++) {
+          entries2.push({ id: `__row_${r}`, meta: { order: r }, order: r });
+        }
+        return entries2;
+      }
+      const entries = [];
+      for (let c = minCol; c <= maxCol; c++) {
+        entries.push({ id: `__col_${c}`, meta: { order: c }, order: c });
+      }
+      return entries;
     }
   };
 
@@ -1707,6 +2205,7 @@ Date: ${date}`;
   // demo/app.ts
   var $ = (id) => document.getElementById(id);
   var repo = null;
+  var activeSheet = "default";
   var registry = new FormatterRegistry();
   registry.register(new FunctionFormatter({ name: "csv", format: csvFormatter }));
   registry.register(new FunctionFormatter({ name: "json", format: jsonFormatter }));
@@ -1727,18 +2226,109 @@ Date: ${date}`;
     const html = `<ul class="list">${items.map((i) => `<li>${escapeHtml2(i)}</li>`).join("")}</ul>`;
     setHTML(el, html);
   }
+  function getSheetNames() {
+    if (!repo) return [];
+    const sheets = repo.listSheets({ includeStaged: true });
+    return sheets.length ? sheets : [];
+  }
+  function ensureActiveSheet() {
+    if (!repo) {
+      activeSheet = "default";
+      setText($("active-sheet"), "\u5F53\u524D\u5DE5\u4F5C\u8868\uFF1A-");
+      return;
+    }
+    const sheets = getSheetNames();
+    if (!sheets.includes(activeSheet)) {
+      activeSheet = sheets[0] ?? "default";
+    }
+    setText($("active-sheet"), sheets.length ? `\u5F53\u524D\u5DE5\u4F5C\u8868\uFF1A${activeSheet}` : "\u5F53\u524D\u5DE5\u4F5C\u8868\uFF1A-");
+  }
+  function renderSheets() {
+    const container = $("sheets");
+    if (!container) return;
+    if (!repo) {
+      setHTML(container, "(\u672A\u521D\u59CB\u5316)");
+      return;
+    }
+    ensureActiveSheet();
+    const sheets = getSheetNames();
+    if (!sheets.length) {
+      setHTML(container, "(\u65E0\u5DE5\u4F5C\u8868)");
+      return;
+    }
+    const items = sheets.map((name, index) => {
+      const prefix = name === activeSheet ? "\u2605 " : "";
+      const disableDelete = sheets.length === 1 ? " disabled" : "";
+      const isDefault = name === "default";
+      return `<span>${escapeHtml2(prefix + name)}</span>
+			<button data-sheet-select="${index}" class="mini">\u5207\u6362</button>
+			<button data-sheet-duplicate="${index}" class="mini">\u590D\u5236</button>
+			<button data-sheet-delete="${index}" class="mini"${disableDelete || isDefault ? " disabled" : ""}>\u5220\u9664</button>`;
+    });
+    setHTML(container, `<ul class="list">${items.map((item) => `<li>${item}</li>`).join("")}</ul>`);
+    container.querySelectorAll("button[data-sheet-select]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = parseInt(btn.dataset.sheetSelect || "-1", 10);
+        const name = sheets[idx];
+        if (!name) return;
+        activeSheet = name;
+        refreshAll();
+      });
+    });
+    container.querySelectorAll("button[data-sheet-duplicate]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (!repo) return;
+        const idx = parseInt(btn.dataset.sheetDuplicate || "-1", 10);
+        const name = sheets[idx];
+        if (!name) return;
+        const nextName = window.prompt(`\u590D\u5236\u5DE5\u4F5C\u8868 "${name}" \u4E3A\uFF1A`, `${name}_\u526F\u672C`);
+        if (!nextName) return;
+        try {
+          repo.duplicateSheet(name, nextName.trim());
+          activeSheet = nextName.trim();
+        } catch (e) {
+          console.warn(e);
+        }
+        refreshAll();
+      });
+    });
+    container.querySelectorAll("button[data-sheet-delete]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (!repo) return;
+        const idx = parseInt(btn.dataset.sheetDelete || "-1", 10);
+        const name = sheets[idx];
+        if (!name) return;
+        if (!window.confirm(`\u786E\u5B9A\u5220\u9664\u5DE5\u4F5C\u8868 "${name}"\uFF1F`)) return;
+        try {
+          repo.deleteSheet(name);
+          if (activeSheet === name) {
+            const remaining = getSheetNames().filter((n) => n !== name);
+            activeSheet = remaining[0] ?? "default";
+          }
+        } catch (e) {
+          console.warn(e);
+        }
+        refreshAll();
+      });
+    });
+  }
   function refreshAll() {
     if (!repo) return;
+    ensureActiveSheet();
+    renderSheets();
     const s = repo.status();
     setText($("status"), `\u5206\u652F: ${s.branch}, \u6682\u5B58: ${s.stagedChanges}, \u6700\u540E\u63D0\u4EA4: ${s.lastCommit || "\u65E0"}`);
-    const tree = repo.getWorkingTree();
-    if (tree) {
-      const cols = tree.structure.getColumnIds().map((id, i) => {
-        const c = tree.structure.getColumn(id);
+    setText($("active-sheet"), `\u5F53\u524D\u5DE5\u4F5C\u8868\uFF1A${activeSheet}`);
+    const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+    if (sheet) {
+      const cols = sheet.structure.getColumnIds().map((id) => {
+        const c = sheet.structure.getColumn(id);
         const name = c.name || id;
         return `${name} (${c.dataType}) width=${c.width}`;
       });
       renderList("columns", cols);
+    } else {
+      renderList("columns", ["(\u65E0\u7ED3\u6784)"]);
     }
     const branches = repo.getBranches();
     const current = repo.getCurrentBranch();
@@ -1823,16 +2413,16 @@ Date: ${date}`;
   }
   function renderGrid() {
     if (!repo) return;
-    const tree = repo.getWorkingTree();
-    if (!tree) {
+    const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+    if (!sheet) {
       setHTML($("grid"), "(\u7A7A)");
       return;
     }
-    const adapter = new TableDataAdapter(repo);
+    const adapter = new TableDataAdapter(repo, activeSheet);
     const data = adapter.build();
     const rows = data.matrix;
     const hasHeader = data.header.length > 0;
-    const html = ["<table>"];
+    const html = ["<table>", `<caption>\u5DE5\u4F5C\u8868\uFF1A${escapeHtml2(activeSheet)}</caption>`];
     if (hasHeader && rows.length) {
       html.push("<thead><tr>");
       for (let c = 0; c < rows[0].length; c++) {
@@ -1859,12 +2449,12 @@ Date: ${date}`;
   }
   function refreshPreview() {
     if (!repo) return;
-    const adapter = new TableDataAdapter(repo);
+    const adapter = new TableDataAdapter(repo, activeSheet);
     const data = adapter.build();
     const html = registry.format("html", data, { includeHeader: true });
     const csv = registry.format("csv", data, { includeHeader: true, quoteText: true });
     const json = registry.format("json", data, { shape: "rows", space: 2 });
-    setText($("previewFrom"), "\u9884\u89C8\u6765\u6E90\uFF1A\u5F53\u524D\u5DE5\u4F5C\u533A");
+    setText($("previewFrom"), `\u9884\u89C8\u6765\u6E90\uFF1A\u5F53\u524D\u5DE5\u4F5C\u533A\uFF08${activeSheet}\uFF09`);
     const doc = document.getElementById("htmlFrame").contentWindow?.document;
     if (doc) {
       doc.open();
@@ -1874,14 +2464,15 @@ Date: ${date}`;
     setText($("csvOut"), csv);
     setText($("jsonOut"), json);
   }
-  function previewFrom(source, label) {
+  function previewFrom(source, label, sheetName) {
     if (!repo) return;
-    const adapter = new TableDataAdapter(repo);
+    const targetSheet = sheetName ?? activeSheet;
+    const adapter = new TableDataAdapter(repo, targetSheet);
     const data = adapter.build(source);
     const html = registry.format("html", data, { includeHeader: true });
     const csv = registry.format("csv", data, { includeHeader: true, quoteText: true });
     const json = registry.format("json", data, { shape: "rows", space: 2 });
-    setText($("previewFrom"), `\u9884\u89C8\u6765\u6E90\uFF1A${label}`);
+    setText($("previewFrom"), `\u9884\u89C8\u6765\u6E90\uFF1A${label}\uFF08${targetSheet}\uFF09`);
     const doc = document.getElementById("htmlFrame").contentWindow?.document;
     if (doc) {
       doc.open();
@@ -1910,6 +2501,8 @@ Date: ${date}`;
   function bindActions() {
     $("btn-init").onclick = () => {
       repo = createSampleTable();
+      seedDemoSheets();
+      activeSheet = "default";
       refreshAll();
     };
     $("btn-create-branch").onclick = () => {
@@ -1918,6 +2511,81 @@ Date: ${date}`;
       repo.createBranch(b);
       refreshAll();
     };
+    const btnCreateSheet = document.getElementById("btn-create-sheet");
+    if (btnCreateSheet) {
+      btnCreateSheet.onclick = () => {
+        if (!repo) return;
+        const input = document.getElementById("sheet-name");
+        const name = input?.value.trim() || `sheet_${generateId("")}`;
+        if (!name) return;
+        try {
+          repo.createSheet(name);
+          activeSheet = name;
+          if (input) input.value = "";
+        } catch (e) {
+          alert(e?.message || String(e));
+        }
+        refreshAll();
+      };
+    }
+    const btnDuplicateSheet = document.getElementById("btn-duplicate-sheet");
+    if (btnDuplicateSheet) {
+      btnDuplicateSheet.onclick = () => {
+        if (!repo) return;
+        const suggestion = `${activeSheet}_\u526F\u672C`;
+        const name = window.prompt("\u590D\u5236\u5F53\u524D\u5DE5\u4F5C\u8868\u4E3A\uFF1A", suggestion)?.trim();
+        if (!name) return;
+        try {
+          repo.duplicateSheet(activeSheet, name);
+          activeSheet = name;
+        } catch (e) {
+          alert(e?.message || String(e));
+        }
+        refreshAll();
+      };
+    }
+    const btnRenameSheet = document.getElementById("btn-rename-sheet");
+    if (btnRenameSheet) {
+      btnRenameSheet.onclick = () => {
+        if (!repo) return;
+        const input = document.getElementById("sheet-rename");
+        const name = input?.value.trim();
+        if (!name) return;
+        try {
+          repo.renameSheet(activeSheet, name);
+          activeSheet = name;
+          if (input) input.value = "";
+        } catch (e) {
+          alert(e?.message || String(e));
+        }
+        refreshAll();
+      };
+    }
+    const btnDeleteSheet = document.getElementById("btn-delete-sheet");
+    if (btnDeleteSheet) {
+      btnDeleteSheet.onclick = () => {
+        if (!repo) return;
+        if (activeSheet === "default") {
+          alert("\u9ED8\u8BA4\u5DE5\u4F5C\u8868\u4E0D\u53EF\u5220\u9664");
+          return;
+        }
+        const sheets = getSheetNames();
+        if (sheets.length <= 1) {
+          alert("\u81F3\u5C11\u9700\u8981\u4FDD\u7559\u4E00\u4E2A\u5DE5\u4F5C\u8868");
+          return;
+        }
+        if (!window.confirm(`\u786E\u8BA4\u5220\u9664\u5F53\u524D\u5DE5\u4F5C\u8868 "${activeSheet}"\uFF1F`)) return;
+        try {
+          const removed = activeSheet;
+          repo.deleteSheet(removed);
+          const remaining = getSheetNames().filter((n) => n !== removed);
+          activeSheet = remaining[0] ?? "default";
+        } catch (e) {
+          alert(e?.message || String(e));
+        }
+        refreshAll();
+      };
+    }
     const grid = document.getElementById("grid");
     if (grid) {
       grid.addEventListener("click", (e) => {
@@ -1931,11 +2599,11 @@ Date: ${date}`;
         if (!rowStr || !colStr) return;
         const row = parseInt(rowStr, 10);
         const col = parseInt(colStr, 10);
-        const currentVal = repo.getCellValue(row, col);
+        const currentVal = repo.getCellValue(row, col, activeSheet);
         const next = window.prompt(`\u4FEE\u6539\u5355\u5143\u683C (${row}, ${col}) \u7684\u503C\uFF1A`, currentVal != null ? String(currentVal) : "");
         if (next === null) return;
         try {
-          repo.addCellChange("default", row, col, next);
+          repo.addCellChange(activeSheet, row, col, next);
         } catch (err) {
           console.warn(err);
         }
@@ -1961,24 +2629,29 @@ Date: ${date}`;
     if (btnInsertCol) {
       btnInsertCol.onclick = () => {
         if (!repo) return;
-        const tree = repo.getWorkingTree();
-        const order = tree ? tree.structure.getColumnIds().length : 0;
+        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+        const adapter = new TableDataAdapter(repo, activeSheet);
+        const data = adapter.build();
+        const nextOrder = (() => {
+          if (sheet) {
+            const ids = sheet.structure.getColumnIds();
+            let max = -1;
+            ids.forEach((id) => {
+              const meta = sheet.structure.getColumn(id);
+              if (meta && typeof meta.order === "number") {
+                max = Math.max(max, meta.order);
+              }
+            });
+            if (max >= 0) return max + 1;
+          }
+          return data.maxCol >= data.minCol ? data.maxCol + 1 : 0;
+        })();
         const colId = `col_${generateId("")}`;
-        const col = createColumn(colId, { order });
+        const col = createColumn(colId, { order: nextOrder });
         try {
-          repo.addColumn("default", col);
+          repo.addColumn(activeSheet, col);
         } catch (e) {
           console.warn(e);
-        }
-        const adapter = new TableDataAdapter(repo);
-        const data = adapter.build();
-        const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
-        const newColIndex = hasBounds ? data.maxCol + 1 : 0;
-        for (let r = hasBounds ? data.minRow : 0; r <= (hasBounds ? data.maxRow : 0); r++) {
-          try {
-            repo.addCellChange("default", r, newColIndex, "");
-          } catch {
-          }
         }
         refreshAll();
       };
@@ -1987,32 +2660,165 @@ Date: ${date}`;
     if (btnInsertRow) {
       btnInsertRow.onclick = () => {
         if (!repo) return;
-        const tree = repo.getWorkingTree();
-        const order = tree ? tree.structure.getRowIds().length : 0;
-        const row = createRow({ order });
+        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+        const adapter = new TableDataAdapter(repo, activeSheet);
+        const data = adapter.build();
+        const nextOrder = (() => {
+          if (sheet) {
+            const ids = sheet.structure.getRowIds();
+            let max = -1;
+            ids.forEach((id) => {
+              const meta = sheet.structure.getRow(id);
+              if (meta && typeof meta.order === "number") {
+                max = Math.max(max, meta.order);
+              }
+            });
+            if (max >= 0) return max + 1;
+          }
+          return data.maxRow >= data.minRow ? data.maxRow + 1 : 0;
+        })();
+        const row = createRow({ order: nextOrder });
         try {
-          repo.addRow("default", row);
+          repo.addRow(activeSheet, row);
         } catch (e) {
           console.warn(e);
         }
-        const adapter = new TableDataAdapter(repo);
-        const data = adapter.build();
-        const hasBounds = data.maxCol >= data.minCol && data.maxRow >= data.minRow;
-        const newRowIndex = hasBounds ? data.maxRow + 1 : 0;
-        for (let c = hasBounds ? data.minCol : 0; c <= (hasBounds ? data.maxCol : 0); c++) {
-          try {
-            repo.addCellChange("default", newRowIndex, c, "");
-          } catch {
-          }
-        }
         refreshAll();
       };
+    }
+    const btnDeleteColByIndex = document.getElementById("btn-delete-col-index");
+    if (btnDeleteColByIndex) {
+      btnDeleteColByIndex.onclick = () => {
+        if (!repo) return;
+        const input = document.getElementById("col-index");
+        const raw = input?.value.trim();
+        if (!raw?.length) {
+          alert("\u8BF7\u8F93\u5165\u5217\u7D22\u5F15");
+          return;
+        }
+        const colIndex = Number(raw);
+        if (!Number.isInteger(colIndex) || colIndex < 0) {
+          alert("\u5217\u7D22\u5F15\u9700\u4E3A\u975E\u8D1F\u6574\u6570");
+          return;
+        }
+        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+        if (!sheet) {
+          alert("\u5F53\u524D\u5DE5\u4F5C\u8868\u4E3A\u7A7A");
+          return;
+        }
+        let structIds = sheet.structure.getColumnIds();
+        if (structIds.length === 0) {
+          const bounds = sheet.getBounds?.();
+          if (bounds) {
+            for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
+              repo.addColumn(activeSheet, createColumn(`auto_col_${c}`, { order: c }));
+            }
+            const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+            if (refreshed) {
+              structIds = refreshed.structure.getColumnIds();
+            }
+          }
+        }
+        if (colIndex >= structIds.length) {
+          alert("\u7ED3\u6784\u5217\u7D22\u5F15\u4E0D\u5B58\u5728\uFF0C\u8BF7\u68C0\u67E5\u5217\u987A\u5E8F\u3002");
+          return;
+        }
+        const targetId = structIds[colIndex];
+        if (!targetId) {
+          alert("\u672A\u627E\u5230\u5BF9\u5E94\u5217 ID\u3002");
+          return;
+        }
+        try {
+          repo.deleteColumn(activeSheet, targetId);
+        } catch (e) {
+          console.warn(e);
+        }
+        if (input) input.value = "";
+        refreshAll();
+      };
+    }
+    const btnDeleteRowByIndex = document.getElementById("btn-delete-row-index");
+    if (btnDeleteRowByIndex) {
+      btnDeleteRowByIndex.onclick = () => {
+        if (!repo) return;
+        const input = document.getElementById("row-index");
+        const raw = input?.value.trim();
+        if (!raw?.length) {
+          alert("\u8BF7\u8F93\u5165\u884C\u7D22\u5F15");
+          return;
+        }
+        const rowIndex = Number(raw);
+        if (!Number.isInteger(rowIndex) || rowIndex < 0) {
+          alert("\u884C\u7D22\u5F15\u9700\u4E3A\u975E\u8D1F\u6574\u6570");
+          return;
+        }
+        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+        if (!sheet) {
+          alert("\u5F53\u524D\u5DE5\u4F5C\u8868\u4E3A\u7A7A");
+          return;
+        }
+        let structIds = sheet.structure.getRowIds();
+        if (structIds.length === 0) {
+          const bounds = sheet.getBounds?.();
+          if (bounds) {
+            for (let r = bounds.minRow; r <= bounds.maxRow; r++) {
+              repo.addRow(activeSheet, createRow({ order: r, id: `auto_row_${r}` }));
+            }
+            const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
+            if (refreshed) {
+              structIds = refreshed.structure.getRowIds();
+            }
+          }
+        }
+        if (rowIndex >= structIds.length) {
+          alert("\u7ED3\u6784\u884C\u7D22\u5F15\u4E0D\u5B58\u5728\uFF0C\u8BF7\u68C0\u67E5\u884C\u987A\u5E8F\u3002");
+          return;
+        }
+        const targetId = structIds[rowIndex];
+        if (!targetId) {
+          alert("\u672A\u627E\u5230\u5BF9\u5E94\u884C ID\u3002");
+          return;
+        }
+        try {
+          repo.deleteRow(activeSheet, targetId);
+        } catch (e) {
+          console.warn(e);
+        }
+        if (input) input.value = "";
+        refreshAll();
+      };
+    }
+  }
+  function seedDemoSheets() {
+    if (!repo) return;
+    if (!repo.hasSheet("analysis")) {
+      repo.createSheet("analysis", { order: 1 });
+      repo.addRow("analysis", createRow({ id: "row_0", order: 0 }));
+      repo.addRow("analysis", createRow({ id: "row_1", order: 1 }));
+      repo.addRow("analysis", createRow({ id: "row_2", order: 2 }));
+      repo.addRow("analysis", createRow({ id: "row_3", order: 3 }));
+      repo.addCellChange("analysis", 0, 0, "\u6307\u6807", void 0, { fontWeight: "bold" });
+      repo.addCellChange("analysis", 0, 1, "\u6570\u503C", void 0, { fontWeight: "bold" });
+      repo.addCellChange("analysis", 1, 0, "\u4EA7\u54C1\u6570\u91CF");
+      repo.addCellChange("analysis", 1, 1, 3);
+      repo.addCellChange("analysis", 2, 0, "\u5E73\u5747\u4EF7\u683C");
+      repo.addCellChange("analysis", 2, 1, 8185.67);
+      repo.addCellChange("analysis", 3, 0, "\u5E93\u5B58\u603B\u91CF");
+      repo.addCellChange("analysis", 3, 1, 225);
+      repo.commit("\u65B0\u589E\u5206\u6790\u5DE5\u4F5C\u8868", "System", "system@example.com");
+    }
+    const sheets = repo.listSheets();
+    if (!sheets.includes("draft")) {
+      repo.duplicateSheet("default", "draft");
+      repo.commit("\u590D\u5236\u9ED8\u8BA4\u5DE5\u4F5C\u8868", "System", "system@example.com");
     }
   }
   function main() {
     bindTabs();
     bindActions();
     repo = createSampleTable();
+    seedDemoSheets();
+    activeSheet = "default";
     refreshAll();
   }
   document.addEventListener("DOMContentLoaded", main);

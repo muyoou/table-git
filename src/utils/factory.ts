@@ -110,6 +110,12 @@ export function createSampleTable(): TableGit {
   // 添加列到表格
   columns.forEach(col => repo.addColumn('default', col));
   
+  // 初始化行结构（含表头行0）
+  // 这里按当前示例数据的行数创建稳定的行ID和顺序
+  for (let r = 0; r <= 3; r++) {
+    repo.addRow('default', createRow({ id: `row_${r}`, order: r }));
+  }
+  
   // 第0行作为列头，和普通单元格一样处理
   repo.addCellChange('default', 0, 0, '产品名称', undefined, { fontWeight: 'bold' });
   repo.addCellChange('default', 0, 1, '价格', undefined, { fontWeight: 'bold' });

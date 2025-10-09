@@ -280,17 +280,6 @@ export class TableGit {
     });
   }
 
-  moveColumn(sheetName: string, columnId: string, newIndex: number): void {
-    this.ensureSheetExists(sheetName);
-    const changeKey = `${sheetName}:column:move:${columnId}`;
-    this.index.set(changeKey, {
-      type: ChangeType.COLUMN_MOVE,
-      sheetName,
-      details: { columnId, newIndex },
-      timestamp: Date.now()
-    });
-  }
-
   // ========== 行操作 ==========
 
   addRow(sheetName: string, row: RowMetadata): void {
@@ -460,7 +449,18 @@ export class TableGit {
       }
       case ChangeType.COLUMN_DELETE: {
         const sheet = this.getMutableSheet(table, sheets, change.sheetName);
-        sheet.structure.removeColumn(change.details.columnId);
+        const columnId: string = change.details.columnId;
+        const column = sheet.structure.getColumn(columnId);
+        if (column && typeof column.order === 'number') {
+          const columnIndex = column.order;
+          const cells = sheet.getAllCellPositions();
+          for (const { row, col } of cells) {
+            if (col === columnIndex) {
+              sheet.deleteCell(row, col);
+            }
+          }
+        }
+        sheet.structure.removeColumn(columnId);
         break;
       }
       case ChangeType.COLUMN_MOVE: {
@@ -475,7 +475,18 @@ export class TableGit {
       }
       case ChangeType.ROW_DELETE: {
         const sheet = this.getMutableSheet(table, sheets, change.sheetName);
-        sheet.structure.removeRow(change.details.rowId);
+        const rowId: string = change.details.rowId;
+        const row = sheet.structure.getRow(rowId);
+        if (row && typeof row.order === 'number') {
+          const rowIndex = row.order;
+          const cells = sheet.getAllCellPositions();
+          for (const { row: r, col } of cells) {
+            if (r === rowIndex) {
+              sheet.deleteCell(r, col);
+            }
+          }
+        }
+        sheet.structure.removeRow(rowId);
         break;
       }
       case ChangeType.ROW_SORT: {
