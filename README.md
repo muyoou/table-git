@@ -218,13 +218,17 @@ class TableGit {
   
   // 列操作
   addColumn(sheet: string, column: ColumnMetadata): void
+  getNextColumnOrder(sheet: string, options?: { includeStaged?: boolean }): number
   updateColumn(sheet: string, columnId: string, updates: Partial<ColumnMetadata>): void
   deleteColumn(sheet: string, columnId: string): void
+  deleteColumnByIndex(sheet: string, columnIndex: number, options?: { includeStaged?: boolean }): void
   moveColumn(sheet: string, columnId: string, newIndex: number): void
   
   // 行操作
   addRow(sheet: string, row: RowMetadata): void
+  getNextRowOrder(sheet: string, options?: { includeStaged?: boolean }): number
   deleteRow(sheet: string, rowId: string): void
+  deleteRowByIndex(sheet: string, rowIndex: number, options?: { includeStaged?: boolean }): void
   sortRows(sheet: string, criteria: SortCriteria[]): void
   
   // 版本控制
@@ -242,6 +246,9 @@ class TableGit {
   getBranches(): string[]
 }
 ```
+
+- `getNextColumnOrder` / `getNextRowOrder` 会自动依据结构信息或单元格边界推算下一个顺序，方便视图层快速插入结构。
+- `deleteColumnByIndex` / `deleteRowByIndex` 支持按索引删除，并在缺少结构描述时回退到数据边界。
 
 ### 便利函数
 

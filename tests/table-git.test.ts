@@ -216,6 +216,29 @@ describe('表格结构操作测试', () => {
     expect(workingTree?.structure.columns.has(column.id)).toBe(false);
   });
 
+  test('在缺少结构时应基于单元格边界计算下一个列顺序', () => {
+    repo.addCellChange('default', 0, 0, 'A');
+    repo.addCellChange('default', 0, 1, 'B');
+    repo.commit('初始化单元格', 'Test User', 'test@example.com');
+
+    const nextOrder = repo.getNextColumnOrder('default');
+    expect(nextOrder).toBe(2);
+  });
+
+  test('deleteColumnByIndex 应在缺少结构时删除对应列', () => {
+    repo.addCellChange('default', 0, 0, 'A');
+    repo.addCellChange('default', 0, 1, 'B');
+    repo.addCellChange('default', 1, 0, 'C');
+    repo.addCellChange('default', 1, 1, 'D');
+    repo.commit('初始化矩阵', 'Test User', 'test@example.com');
+
+    repo.deleteColumnByIndex('default', 0);
+    repo.commit('删除首列', 'Test User', 'test@example.com');
+
+    expect(repo.getCellValue(0, 0)).toBeUndefined();
+    expect(repo.getCellValue(0, 1)).toBe('B');
+  });
+
   test('应该能够添加和删除行', () => {
     const row1 = { id: 'row_1', height: 25, hidden: false, order: 0 };
     const row2 = { id: 'row_2', height: 30, hidden: false, order: 1 };
@@ -235,6 +258,28 @@ describe('表格结构操作测试', () => {
     workingTree = repo.getWorkingTree();
     expect(workingTree?.structure.rows.has('row_1')).toBe(false);
     expect(workingTree?.structure.rows.has('row_2')).toBe(true);
+  });
+
+  test('在缺少结构时应基于单元格边界计算下一个行顺序', () => {
+    repo.addCellChange('default', 0, 0, 'Header');
+    repo.addCellChange('default', 1, 0, 'Row1');
+    repo.commit('初始化行', 'Test User', 'test@example.com');
+
+    const nextOrder = repo.getNextRowOrder('default');
+    expect(nextOrder).toBe(2);
+  });
+
+  test('deleteRowByIndex 应在缺少结构时删除对应行', () => {
+    repo.addCellChange('default', 0, 0, 'Header');
+    repo.addCellChange('default', 1, 0, 'Row1');
+    repo.addCellChange('default', 2, 0, 'Row2');
+    repo.commit('初始化多行', 'Test User', 'test@example.com');
+
+    repo.deleteRowByIndex('default', 1);
+    repo.commit('删除第二行', 'Test User', 'test@example.com');
+
+    expect(repo.getCellValue(1, 0)).toBeUndefined();
+    expect(repo.getCellValue(2, 0)).toBe('Row2');
   });
 
   test('应该能够像普通单元格一样操作列头', () => {

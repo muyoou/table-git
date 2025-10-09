@@ -476,23 +476,7 @@ function bindActions() {
 	if (btnInsertCol) {
 		btnInsertCol.onclick = () => {
 			if (!repo) return;
-			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-			const adapter = new TableDataAdapter(repo, activeSheet);
-			const data = adapter.build();
-			const nextOrder = (() => {
-				if (sheet) {
-					const ids = sheet.structure.getColumnIds();
-					let max = -1;
-					ids.forEach(id => {
-						const meta = sheet.structure.getColumn(id);
-						if (meta && typeof meta.order === 'number') {
-							max = Math.max(max, meta.order);
-						}
-					});
-					if (max >= 0) return max + 1;
-				}
-				return (data.maxCol >= data.minCol) ? data.maxCol + 1 : 0;
-			})();
+			const nextOrder = repo.getNextColumnOrder(activeSheet);
 			const colId = `col_${generateId('')}`;
 			const col = createColumn(colId, { order: nextOrder });
 			try {
@@ -507,23 +491,7 @@ function bindActions() {
 	if (btnInsertRow) {
 		btnInsertRow.onclick = () => {
 			if (!repo) return;
-			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-			const adapter = new TableDataAdapter(repo, activeSheet);
-			const data = adapter.build();
-			const nextOrder = (() => {
-				if (sheet) {
-					const ids = sheet.structure.getRowIds();
-					let max = -1;
-					ids.forEach(id => {
-						const meta = sheet.structure.getRow(id);
-						if (meta && typeof meta.order === 'number') {
-							max = Math.max(max, meta.order);
-						}
-					});
-					if (max >= 0) return max + 1;
-				}
-				return (data.maxRow >= data.minRow) ? data.maxRow + 1 : 0;
-			})();
+			const nextOrder = repo.getNextRowOrder(activeSheet);
 			const row = createRow({ order: nextOrder });
 			try {
 				repo.addRow(activeSheet, row);
@@ -542,34 +510,11 @@ function bindActions() {
 			if (!raw?.length) { alert('请输入列索引'); return; }
 			const colIndex = Number(raw);
 			if (!Number.isInteger(colIndex) || colIndex < 0) { alert('列索引需为非负整数'); return; }
-
-			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-			if (!sheet) { alert('当前工作表为空'); return; }
-
-			// 如果当前没有列结构，则尝试基于现有单元格边界自动补齐列结构
-			let structIds = sheet.structure.getColumnIds();
-			if (structIds.length === 0) {
-				const bounds = sheet.getBounds?.();
-				if (bounds) {
-					for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
-						// 生成稳定列ID：优先使用已有列元数据（无），否则统一前缀
-						repo.addColumn(activeSheet, createColumn(`auto_col_${c}`, { order: c }));
-					}
-					// 重新获取最新 sheet 结构（包含刚刚暂存的列添加）
-					const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-					if (refreshed) {
-						structIds = refreshed.structure.getColumnIds();
-					}
-				}
-			}
-
-			if (colIndex >= structIds.length) { alert('结构列索引不存在，请检查列顺序。'); return; }
-			const targetId = structIds[colIndex];
-			if (!targetId) { alert('未找到对应列 ID。'); return; }
-
 			try {
-				repo.deleteColumn(activeSheet, targetId);
-			} catch (e) { console.warn(e); }
+				repo.deleteColumnByIndex(activeSheet, colIndex);
+			} catch (e: any) {
+				alert(e?.message || String(e));
+			}
 
 			if (input) input.value = '';
 			refreshAll();
@@ -586,32 +531,11 @@ function bindActions() {
 			if (!raw?.length) { alert('请输入行索引'); return; }
 			const rowIndex = Number(raw);
 			if (!Number.isInteger(rowIndex) || rowIndex < 0) { alert('行索引需为非负整数'); return; }
-
-			const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-			if (!sheet) { alert('当前工作表为空'); return; }
-
-			// 如果当前没有行结构，则尝试基于现有单元格边界自动补齐行结构
-			let structIds = sheet.structure.getRowIds();
-			if (structIds.length === 0) {
-				const bounds = sheet.getBounds?.();
-				if (bounds) {
-					for (let r = bounds.minRow; r <= bounds.maxRow; r++) {
-						repo.addRow(activeSheet, createRow({ order: r, id: `auto_row_${r}` }));
-					}
-					const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-					if (refreshed) {
-						structIds = refreshed.structure.getRowIds();
-					}
-				}
-			}
-
-			if (rowIndex >= structIds.length) { alert('结构行索引不存在，请检查行顺序。'); return; }
-			const targetId = structIds[rowIndex];
-			if (!targetId) { alert('未找到对应行 ID。'); return; }
-
 			try {
-				repo.deleteRow(activeSheet, targetId);
-			} catch (e) { console.warn(e); }
+				repo.deleteRowByIndex(activeSheet, rowIndex);
+			} catch (e: any) {
+				alert(e?.message || String(e));
+			}
 
 			if (input) input.value = '';
 			refreshAll();

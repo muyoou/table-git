@@ -1,8 +1,8 @@
-import { 
-  ChangeType, 
-  Change, 
-  ColumnMetadata, 
-  RowMetadata, 
+import {
+  ChangeType,
+  Change,
+  ColumnMetadata,
+  RowMetadata,
   SortCriteria,
   CellValue,
   CellFormat,
@@ -16,6 +16,7 @@ import { CellObject } from './cell';
 import { SheetTree } from './sheet';
 import { CommitObject } from './commit';
 import { TableTree } from './table-tree';
+import { deepClone, generateId } from '../utils/hash';
 
 /**
  * 表格版本控制引擎 - Git 风格的表格版本控制系统
@@ -249,13 +250,43 @@ export class TableGit {
 
   addColumn(sheetName: string, column: ColumnMetadata): void {
     this.ensureSheetExists(sheetName);
-    const changeKey = `${sheetName}:column:add:${column.id}`;
+    const normalized = this.normalizeColumnMetadata(sheetName, column);
+    const changeKey = `${sheetName}:column:add:${normalized.id}`;
     this.index.set(changeKey, {
       type: ChangeType.COLUMN_ADD,
       sheetName,
-      details: column,
+      details: normalized,
       timestamp: Date.now()
     });
+  }
+
+  getNextColumnOrder(sheetName: string, options?: { includeStaged?: boolean }): number {
+    this.ensureSheetExists(sheetName);
+    const includeStaged = options?.includeStaged ?? true;
+    const sheet = this.getPreviewSheet(sheetName, { includeStaged });
+    if (!sheet) {
+      return 0;
+    }
+
+    let maxOrder = Number.NEGATIVE_INFINITY;
+    const columnIds = sheet.structure.getColumnIds();
+    for (const id of columnIds) {
+      const meta = sheet.structure.getColumn(id);
+      if (meta && typeof meta.order === 'number') {
+        maxOrder = Math.max(maxOrder, meta.order);
+      }
+    }
+
+    if (maxOrder > Number.NEGATIVE_INFINITY) {
+      return maxOrder + 1;
+    }
+
+    const bounds = sheet.getBounds();
+    if (bounds) {
+      return bounds.maxCol + 1;
+    }
+
+    return 0;
   }
 
   updateColumn(sheetName: string, columnId: string, updates: Partial<ColumnMetadata>): void {
@@ -280,17 +311,110 @@ export class TableGit {
     });
   }
 
+  moveColumn(sheetName: string, columnId: string, newIndex: number): void {
+    this.ensureSheetExists(sheetName);
+    if (!Number.isInteger(newIndex) || newIndex < 0) {
+      throw new Error('Column index must be a non-negative integer');
+    }
+
+    const changeKey = `${sheetName}:column:move:${columnId}`;
+    this.index.set(changeKey, {
+      type: ChangeType.COLUMN_MOVE,
+      sheetName,
+      details: { columnId, newIndex },
+      timestamp: Date.now()
+    });
+  }
+
+  deleteColumnByIndex(sheetName: string, columnIndex: number, options?: { includeStaged?: boolean }): void {
+    this.ensureSheetExists(sheetName);
+    if (!Number.isInteger(columnIndex) || columnIndex < 0) {
+      throw new Error('Column index must be a non-negative integer');
+    }
+
+    const includeStaged = options?.includeStaged ?? true;
+    let sheet = this.getPreviewSheet(sheetName, { includeStaged });
+    if (!sheet) {
+      throw new Error(`Sheet '${sheetName}' does not exist`);
+    }
+
+    const columnIds = sheet.structure.getColumnIds();
+    if (columnIds.length > 0) {
+      if (columnIndex >= columnIds.length) {
+        throw new Error(`Column index ${columnIndex} is out of bounds`);
+      }
+      const columnId = columnIds[columnIndex];
+      this.deleteColumn(sheetName, columnId);
+      return;
+    }
+
+    const bounds = sheet.getBounds();
+    if (!bounds) {
+      throw new Error(`Sheet '${sheetName}' has no data to infer columns from`);
+    }
+
+    const totalColumns = bounds.maxCol - bounds.minCol + 1;
+    if (columnIndex >= totalColumns) {
+      throw new Error(`Column index ${columnIndex} is out of bounds`);
+    }
+
+    const columnOrder = bounds.minCol + columnIndex;
+    const changeKeyBase = `${sheetName}:column:delete-order:${columnOrder}`;
+    let changeKey = changeKeyBase;
+    let counter = 1;
+    while (this.index.has(changeKey)) {
+      changeKey = `${changeKeyBase}:${counter++}`;
+    }
+
+    this.index.set(changeKey, {
+      type: ChangeType.COLUMN_DELETE,
+      sheetName,
+      details: { columnOrder },
+      timestamp: Date.now()
+    });
+  }
+
   // ========== 行操作 ==========
 
   addRow(sheetName: string, row: RowMetadata): void {
     this.ensureSheetExists(sheetName);
-    const changeKey = `${sheetName}:row:add:${row.id}`;
+    const normalized = this.normalizeRowMetadata(sheetName, row);
+    const changeKey = `${sheetName}:row:add:${normalized.id}`;
     this.index.set(changeKey, {
       type: ChangeType.ROW_ADD,
       sheetName,
-      details: row,
+      details: normalized,
       timestamp: Date.now()
     });
+  }
+
+  getNextRowOrder(sheetName: string, options?: { includeStaged?: boolean }): number {
+    this.ensureSheetExists(sheetName);
+    const includeStaged = options?.includeStaged ?? true;
+    const sheet = this.getPreviewSheet(sheetName, { includeStaged });
+    if (!sheet) {
+      return 0;
+    }
+
+    let maxOrder = Number.NEGATIVE_INFINITY;
+    const rowIds = sheet.structure.getRowIds();
+    for (const id of rowIds) {
+      const meta = sheet.structure.getRow(id);
+      if (meta && typeof meta.order === 'number') {
+        maxOrder = Math.max(maxOrder, meta.order);
+      }
+    }
+
+    if (maxOrder > Number.NEGATIVE_INFINITY) {
+      return maxOrder + 1;
+    }
+
+    const bounds = sheet.getBounds();
+    if (bounds) {
+      return bounds.maxRow + 1;
+    }
+
+    return 0;
   }
 
   deleteRow(sheetName: string, rowId: string): void {
@@ -300,6 +424,54 @@ export class TableGit {
       type: ChangeType.ROW_DELETE,
       sheetName,
       details: { rowId },
+      timestamp: Date.now()
+    });
+  }
+
+  deleteRowByIndex(sheetName: string, rowIndex: number, options?: { includeStaged?: boolean }): void {
+    this.ensureSheetExists(sheetName);
+    if (!Number.isInteger(rowIndex) || rowIndex < 0) {
+      throw new Error('Row index must be a non-negative integer');
+    }
+
+    const includeStaged = options?.includeStaged ?? true;
+    let sheet = this.getPreviewSheet(sheetName, { includeStaged });
+    if (!sheet) {
+      throw new Error(`Sheet '${sheetName}' does not exist`);
+    }
+
+    const rowIds = sheet.structure.getRowIds();
+    if (rowIds.length > 0) {
+      if (rowIndex >= rowIds.length) {
+        throw new Error(`Row index ${rowIndex} is out of bounds`);
+      }
+      const rowId = rowIds[rowIndex];
+      this.deleteRow(sheetName, rowId);
+      return;
+    }
+
+    const bounds = sheet.getBounds();
+    if (!bounds) {
+      throw new Error(`Sheet '${sheetName}' has no data to infer rows from`);
+    }
+
+    const totalRows = bounds.maxRow - bounds.minRow + 1;
+    if (rowIndex >= totalRows) {
+      throw new Error(`Row index ${rowIndex} is out of bounds`);
+    }
+
+    const rowOrder = bounds.minRow + rowIndex;
+    const changeKeyBase = `${sheetName}:row:delete-order:${rowOrder}`;
+    let changeKey = changeKeyBase;
+    let counter = 1;
+    while (this.index.has(changeKey)) {
+      changeKey = `${changeKeyBase}:${counter++}`;
+    }
+
+    this.index.set(changeKey, {
+      type: ChangeType.ROW_DELETE,
+      sheetName,
+      details: { rowOrder },
       timestamp: Date.now()
     });
   }
@@ -449,18 +621,42 @@ export class TableGit {
       }
       case ChangeType.COLUMN_DELETE: {
         const sheet = this.getMutableSheet(table, sheets, change.sheetName);
-        const columnId: string = change.details.columnId;
-        const column = sheet.structure.getColumn(columnId);
-        if (column && typeof column.order === 'number') {
-          const columnIndex = column.order;
+        const details = change.details ?? {};
+        let targetColumnId: string | undefined = details.columnId;
+        let targetOrder: number | undefined;
+
+        if (typeof details.columnOrder === 'number') {
+          targetOrder = details.columnOrder;
+        } else if (typeof details.columnIndex === 'number') {
+          targetOrder = details.columnIndex;
+        }
+
+        if (targetColumnId) {
+          const column = sheet.structure.getColumn(targetColumnId);
+          if (column && typeof column.order === 'number') {
+            targetOrder = column.order;
+          }
+        } else if (typeof targetOrder === 'number') {
+          targetColumnId = this.findColumnIdByOrder(sheet, targetOrder);
+        }
+
+        if (typeof targetOrder === 'number') {
           const cells = sheet.getAllCellPositions();
           for (const { row, col } of cells) {
-            if (col === columnIndex) {
+            if (col === targetOrder) {
               sheet.deleteCell(row, col);
             }
           }
         }
-        sheet.structure.removeColumn(columnId);
+
+        if (targetColumnId) {
+          sheet.structure.removeColumn(targetColumnId);
+        } else if (typeof targetOrder === 'number') {
+          const fallbackId = this.findColumnIdByOrder(sheet, targetOrder);
+          if (fallbackId) {
+            sheet.structure.removeColumn(fallbackId);
+          }
+        }
         break;
       }
       case ChangeType.COLUMN_MOVE: {
@@ -475,18 +671,42 @@ export class TableGit {
       }
       case ChangeType.ROW_DELETE: {
         const sheet = this.getMutableSheet(table, sheets, change.sheetName);
-        const rowId: string = change.details.rowId;
-        const row = sheet.structure.getRow(rowId);
-        if (row && typeof row.order === 'number') {
-          const rowIndex = row.order;
+        const details = change.details ?? {};
+        let targetRowId: string | undefined = details.rowId;
+        let targetOrder: number | undefined;
+
+        if (typeof details.rowOrder === 'number') {
+          targetOrder = details.rowOrder;
+        } else if (typeof details.rowIndex === 'number') {
+          targetOrder = details.rowIndex;
+        }
+
+        if (targetRowId) {
+          const row = sheet.structure.getRow(targetRowId);
+          if (row && typeof row.order === 'number') {
+            targetOrder = row.order;
+          }
+        } else if (typeof targetOrder === 'number') {
+          targetRowId = this.findRowIdByOrder(sheet, targetOrder);
+        }
+
+        if (typeof targetOrder === 'number') {
           const cells = sheet.getAllCellPositions();
           for (const { row: r, col } of cells) {
-            if (r === rowIndex) {
+            if (r === targetOrder) {
               sheet.deleteCell(r, col);
             }
           }
         }
-        sheet.structure.removeRow(rowId);
+
+        if (targetRowId) {
+          sheet.structure.removeRow(targetRowId);
+        } else if (typeof targetOrder === 'number') {
+          const fallbackId = this.findRowIdByOrder(sheet, targetOrder);
+          if (fallbackId) {
+            sheet.structure.removeRow(fallbackId);
+          }
+        }
         break;
       }
       case ChangeType.ROW_SORT: {
@@ -529,6 +749,57 @@ export class TableGit {
     const currentOrder = sheet.structure.getRowIds();
     const sortedOrder = [...currentOrder].sort((a, b) => a.localeCompare(b));
     sheet.structure.sortRows(sortedOrder);
+  }
+
+  private normalizeColumnMetadata(sheetName: string, column: ColumnMetadata): ColumnMetadata {
+    const normalized = deepClone(column) as ColumnMetadata;
+    if (!normalized.id) {
+      normalized.id = generateId('col_');
+    }
+    if (typeof normalized.order !== 'number' || !Number.isFinite(normalized.order)) {
+      normalized.order = this.getNextColumnOrder(sheetName);
+    }
+    if (typeof normalized.width !== 'number' || normalized.width <= 0) {
+      normalized.width = 120;
+    }
+    if (!normalized.dataType) {
+      normalized.dataType = 'mixed';
+    }
+    return normalized;
+  }
+
+  private normalizeRowMetadata(sheetName: string, row: RowMetadata): RowMetadata {
+    const normalized = deepClone(row) as RowMetadata;
+    if (!normalized.id) {
+      normalized.id = generateId('row_');
+    }
+    if (typeof normalized.order !== 'number' || !Number.isFinite(normalized.order)) {
+      normalized.order = this.getNextRowOrder(sheetName);
+    }
+    if (typeof normalized.height !== 'number' || normalized.height <= 0) {
+      normalized.height = 25;
+    }
+    return normalized;
+  }
+
+  private findColumnIdByOrder(sheet: SheetTree, order: number): string | undefined {
+    for (const id of sheet.structure.getColumnIds()) {
+      const meta = sheet.structure.getColumn(id);
+      if (meta && typeof meta.order === 'number' && meta.order === order) {
+        return id;
+      }
+    }
+    return undefined;
+  }
+
+  private findRowIdByOrder(sheet: SheetTree, order: number): string | undefined {
+    for (const id of sheet.structure.getRowIds()) {
+      const meta = sheet.structure.getRow(id);
+      if (meta && typeof meta.order === 'number' && meta.order === order) {
+        return id;
+      }
+    }
+    return undefined;
   }
 
   // ========== 对象存储 ==========
