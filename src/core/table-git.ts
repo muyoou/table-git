@@ -12,11 +12,13 @@ import {
   SheetMoveDetails,
   SheetDuplicateDetails
 } from '../types';
+import type { TagInfo } from '../types';
 import { CellObject } from './cell';
 import { SheetTree } from './sheet';
 import { CommitObject } from './commit';
 import { TableTree } from './table-tree';
 import { deepClone, generateId } from '../utils/hash';
+import { TagObject } from './tag';
 
 /**
  * 表格版本控制引擎 - Git 风格的表格版本控制系统
@@ -24,6 +26,7 @@ import { deepClone, generateId } from '../utils/hash';
 export class TableGit {
   private objects: Map<string, any>; // 对象存储
   private refs: Map<string, string>; // 分支引用
+  private tags: Map<string, { commit: string; type: 'lightweight' | 'annotated'; tagHash?: string }>;
   private head: string; // 当前分支或提交哈希
   private index: Map<string, Change>; // 暂存区
   private workingTable: TableTree | null; // 当前工作表集合
@@ -33,11 +36,12 @@ export class TableGit {
   constructor() {
     this.objects = new Map();
     this.refs = new Map();
+    this.tags = new Map();
     this.head = 'main';
     this.index = new Map();
-  this.workingTable = null;
-  this.workingSheets = new Map();
-  this.tableSnapshots = new Map();
+    this.workingTable = null;
+    this.workingSheets = new Map();
+    this.tableSnapshots = new Map();
   }
 
   /**
@@ -46,6 +50,7 @@ export class TableGit {
   init(branchName: string = 'main', options?: { defaultSheetName?: string; createDefaultSheet?: boolean }): void {
     this.head = branchName;
     this.refs.set(branchName, '');
+  this.tags.clear();
 
     const table = new TableTree();
     if (options?.createDefaultSheet ?? true) {
@@ -64,11 +69,11 @@ export class TableGit {
       'system@tablegit.com'
     );
 
-  const commitHash = this.storeObject(initialCommit);
-  this.refs.set(branchName, commitHash);
-  this.tableSnapshots.set(commitHash, table.clone());
+    const commitHash = this.storeObject(initialCommit);
+    this.refs.set(branchName, commitHash);
+    this.tableSnapshots.set(commitHash, table.clone());
 
-  this.loadWorkingState(table);
+    this.loadWorkingState(table);
   }
 
   // ========== 工作表级操作 ==========
@@ -505,11 +510,11 @@ export class TableGit {
       currentCommitHash
     );
 
-  const commitHash = this.storeObject(commit);
-  this.refs.set(this.head, commitHash);
-  this.tableSnapshots.set(commitHash, table.clone());
-  this.index.clear();
-  this.loadWorkingState(table, sheets);
+    const commitHash = this.storeObject(commit);
+    this.refs.set(this.head, commitHash);
+    this.tableSnapshots.set(commitHash, table.clone());
+    this.index.clear();
+    this.loadWorkingState(table, sheets);
 
     return commitHash;
   }
@@ -828,12 +833,17 @@ export class TableGit {
       return hash;
     }
 
-  this.objects.set(hash, { type: obj.type ?? 'raw', payload: obj });
+    if (obj instanceof TagObject) {
+      this.objects.set(hash, { type: ObjectType.TAG, payload: obj.toJSON() });
+      return hash;
+    }
+
+    this.objects.set(hash, { type: obj.type ?? 'raw', payload: obj });
     return hash;
   }
 
   private getObject(hash: string): any {
-  const entry = this.objects.get(hash);
+    const entry = this.objects.get(hash);
     if (!entry) {
       return undefined;
     }
@@ -858,7 +868,137 @@ export class TableGit {
       return CommitObject.fromJSON(entry.payload);
     }
 
+    if (entry.type === ObjectType.TAG) {
+      return TagObject.fromJSON(entry.payload);
+    }
+
     return entry.payload;
+  }
+
+  // ========== 标签操作 ==========
+
+  createTag(
+    tagName: string,
+    options?: {
+      commit?: string;
+      message?: string;
+      author?: string;
+      email?: string;
+      force?: boolean;
+    }
+  ): string {
+    this.validateTagName(tagName);
+
+    if (!options?.force && this.tags.has(tagName)) {
+      throw new Error(`Tag '${tagName}' already exists`);
+    }
+
+    const targetCommit = this.resolveCommitHash(options?.commit);
+    if (!targetCommit) {
+      throw new Error('Cannot create tag: no commit specified and repository has no commits');
+    }
+
+    const commitObject = this.getObject(targetCommit);
+    if (!(commitObject instanceof CommitObject)) {
+      throw new Error(`Cannot create tag: commit '${targetCommit}' does not exist`);
+    }
+
+    if (options?.message || options?.author || options?.email) {
+      const tagAuthor = options.author ?? 'Unknown';
+      const tagEmail = options.email ?? 'unknown@example.com';
+      const tag = new TagObject(tagName, commitObject.hash, {
+        message: options.message,
+        author: tagAuthor,
+        email: tagEmail
+      });
+      const tagHash = this.storeObject(tag);
+      this.tags.set(tagName, { commit: commitObject.hash, type: 'annotated', tagHash });
+      return commitObject.hash;
+    }
+
+    this.tags.set(tagName, { commit: commitObject.hash, type: 'lightweight' });
+    return commitObject.hash;
+  }
+
+  deleteTag(tagName: string): void {
+    if (!this.tags.delete(tagName)) {
+      throw new Error(`Tag '${tagName}' does not exist`);
+    }
+  }
+
+  getTag(tagName: string): TagInfo | undefined {
+    const tagEntry = this.tags.get(tagName);
+    if (!tagEntry) {
+      return undefined;
+    }
+
+    const base: TagInfo = {
+      name: tagName,
+      target: tagEntry.commit,
+      type: tagEntry.type
+    };
+
+    if (tagEntry.type === 'annotated' && tagEntry.tagHash) {
+      const tagObject = this.getObject(tagEntry.tagHash) as TagObject | undefined;
+      if (tagObject) {
+        base.tagHash = tagObject.hash;
+        base.message = tagObject.message;
+        base.author = tagObject.author;
+        base.email = tagObject.email;
+        base.timestamp = tagObject.timestamp;
+      }
+    }
+
+    return base;
+  }
+
+  listTags(options?: { withDetails?: boolean }): (string | TagInfo)[] {
+    const names = Array.from(this.tags.keys()).sort();
+    if (!options?.withDetails) {
+      return names;
+    }
+
+    const details: TagInfo[] = [];
+    for (const name of names) {
+      const info = this.getTag(name);
+      if (info) {
+        details.push(info);
+      }
+    }
+    return details;
+  }
+
+  private validateTagName(tagName: string): void {
+    if (!tagName || typeof tagName !== 'string') {
+      throw new Error('Tag name must be a non-empty string');
+    }
+
+    const invalidPattern = /[~^:\\?*\s]/;
+    if (invalidPattern.test(tagName)) {
+      throw new Error(`Tag name '${tagName}' contains invalid characters`);
+    }
+  }
+
+  private resolveCommitHash(reference?: string): string | undefined {
+    if (!reference) {
+      return this.getCurrentCommitHash();
+    }
+
+    if (this.refs.has(reference)) {
+      return this.refs.get(reference);
+    }
+
+    const tagRef = this.tags.get(reference);
+    if (tagRef) {
+      return tagRef.commit;
+    }
+
+    const possibleCommit = this.getObject(reference);
+    if (possibleCommit instanceof CommitObject) {
+      return possibleCommit.hash;
+    }
+
+    return undefined;
   }
 
   // ========== 快照 ==========

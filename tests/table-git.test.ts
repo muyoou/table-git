@@ -1,6 +1,7 @@
 import { TableGit } from '../src/core/table-git';
 import { DiffMergeEngine } from '../src/core/diff-merge';
 import { createTableGit, createColumn } from '../src/index';
+import type { TagInfo } from '../src/types';
 
 describe('TableGit 基础功能测试', () => {
   let repo: TableGit;
@@ -410,5 +411,78 @@ describe('DiffMergeEngine 多工作表差异', () => {
     expect(repo.getSheetSnapshot('default', { commit: afterCellChange })?.getCellHash(1, 1)).toBeDefined();
     const diffCells = engine.diff(afterAddSheet, afterCellChange);
     expect(diffCells.sheets['default'].cellChanges.added).toHaveLength(1);
+  });
+});
+
+describe('标签系统操作', () => {
+  let repo: TableGit;
+
+  beforeEach(() => {
+    repo = createTableGit();
+  });
+
+  test('应该能够创建轻量标签并查看', () => {
+    repo.addCellChange('default', 1, 1, 'Release Candidate');
+    const commitHash = repo.commit('准备发布', 'Release Bot', 'bot@example.com');
+
+    const taggedHash = repo.createTag('v1.0.0');
+    expect(taggedHash).toBe(commitHash);
+
+    const tags = repo.listTags();
+    expect(tags).toContain('v1.0.0');
+
+    const tagInfo = repo.getTag('v1.0.0') as TagInfo;
+    expect(tagInfo.name).toBe('v1.0.0');
+    expect(tagInfo.target).toBe(commitHash);
+    expect(tagInfo.type).toBe('lightweight');
+  });
+
+  test('强制创建标签应更新指向的提交', () => {
+    repo.addCellChange('default', 1, 1, 'First release');
+    const commit1 = repo.commit('第一次发布', 'Release Bot', 'bot@example.com');
+
+    repo.createTag('stable');
+
+    repo.addCellChange('default', 1, 2, 'Patch');
+    const commit2 = repo.commit('修复补丁', 'Release Bot', 'bot@example.com');
+
+    expect(() => repo.createTag('stable')).toThrow("Tag 'stable' already exists");
+
+    repo.createTag('stable', { force: true });
+    const tagInfo = repo.getTag('stable') as TagInfo;
+    expect(tagInfo.target).toBe(commit2);
+    expect(tagInfo.target).not.toBe(commit1);
+  });
+
+  test('可以创建带注释的标签并读取信息', () => {
+    repo.addCellChange('default', 2, 2, 'Annotated release');
+    repo.commit('准备注释标签', 'Release Bot', 'bot@example.com');
+
+    repo.createTag('v1.1.0', {
+      message: '正式发布 1.1.0',
+      author: 'Release Captain',
+      email: 'captain@example.com'
+    });
+
+    const detailedTags = repo.listTags({ withDetails: true }) as TagInfo[];
+    const annotated = detailedTags.find(tag => tag.name === 'v1.1.0');
+    expect(annotated).toBeDefined();
+    expect(annotated?.type).toBe('annotated');
+    expect(annotated?.message).toBe('正式发布 1.1.0');
+    expect(annotated?.author).toBe('Release Captain');
+    expect(annotated?.email).toBe('captain@example.com');
+    expect(annotated?.tagHash).toBeDefined();
+    expect(annotated?.timestamp).toBeGreaterThan(0);
+  });
+
+  test('标签引用应支持通过分支名创建', () => {
+    repo.addCellChange('default', 0, 0, 'Base');
+    repo.commit('基础提交', 'Release Bot', 'bot@example.com');
+
+    repo.addCellChange('default', 0, 1, 'Next');
+    const latestCommit = repo.commit('后续提交', 'Release Bot', 'bot@example.com');
+
+    const resolved = repo.createTag('branch-tag', { commit: 'main' });
+    expect(resolved).toBe(latestCommit);
   });
 });

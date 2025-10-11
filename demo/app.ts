@@ -9,6 +9,7 @@ import {
 	htmlFormatter,
 } from '../src/index.ts';
 import { createColumn, createRow, generateId, ChangeType } from '../src/index.ts';
+import type { TagInfo } from '../src/index.ts';
 
 type El = HTMLElement | null;
 const $ = (id: string) => document.getElementById(id);
@@ -152,6 +153,66 @@ function refreshAll() {
 		renderList('columns', ['(无结构)']);
 	}
 
+	// tags
+	{
+		const el = $("tags");
+		if (el) {
+			const tags = repo.listTags({ withDetails: true }) as TagInfo[];
+			if (!tags.length) {
+				setHTML(el, '(无标签)');
+			} else {
+				const lines = tags.map(tag => {
+					const summary = `${tag.name} (${tag.type === 'annotated' ? '注释' : '轻量'}) → ${tag.target.substring(0, 7)}`;
+					const message = tag.message ? `<div class="muted">${escapeHtml(tag.message)}</div>` : '';
+					const meta = tag.type === 'annotated' && tag.author ? `<div class="muted">${escapeHtml(tag.author)}${tag.email ? ` &lt;${escapeHtml(tag.email)}&gt;` : ''}</div>` : '';
+					return `<div><strong>${escapeHtml(summary)}</strong>${message}${meta}</div>
+						<div class="tag-buttons">
+							<button data-preview-tag="${escapeHtml(tag.name)}" class="mini">预览</button>
+							<button data-checkout-tag="${escapeHtml(tag.name)}" class="mini">切换</button>
+							<button data-delete-tag="${escapeHtml(tag.name)}" class="mini">删除</button>
+						</div>`;
+				});
+				setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
+				el.querySelectorAll('button[data-preview-tag]').forEach(btn => {
+					btn.addEventListener('click', () => {
+						if (!repo) return;
+						const name = (btn as HTMLButtonElement).getAttribute('data-preview-tag')!;
+						const info = repo.getTag(name) as TagInfo | undefined;
+						if (!info) return;
+						previewFrom({ commit: info.target }, `标签: ${name}`);
+					});
+				});
+				el.querySelectorAll('button[data-checkout-tag]').forEach(btn => {
+					btn.addEventListener('click', () => {
+						if (!repo) return;
+						const name = (btn as HTMLButtonElement).getAttribute('data-checkout-tag')!;
+						const info = repo.getTag(name) as TagInfo | undefined;
+						if (!info) return;
+						try {
+							repo.checkout(info.target);
+						} catch (e) {
+							console.warn(e);
+						}
+						refreshAll();
+					});
+				});
+				el.querySelectorAll('button[data-delete-tag]').forEach(btn => {
+					btn.addEventListener('click', () => {
+						if (!repo) return;
+						const name = (btn as HTMLButtonElement).getAttribute('data-delete-tag')!;
+						if (!window.confirm(`确认删除标签 "${name}"？`)) return;
+						try {
+							repo.deleteTag(name);
+						} catch (e) {
+							console.warn(e);
+						}
+						refreshAll();
+					});
+				});
+			}
+		}
+	}
+
 	// branches
 	const branches = repo.getBranches();
 	const current = repo.getCurrentBranch();
@@ -209,12 +270,41 @@ function refreshAll() {
 					const lines = hist.map((c) => {
 						const label = `${c.getShortHash()} - ${c.message}`;
 						return `<span>${escapeHtml(label)}</span>
+							<button data-copy-commit="${escapeHtml(c.hash)}" class="mini">复制</button>
 							<button data-preview-commit="${escapeHtml(c.hash)}" class="mini">预览</button>
 							<button data-checkout-commit="${escapeHtml(c.hash)}" class="mini">切换</button>`;
 					});
 					const el = $("history");
 					if (el) {
 						setHTML(el, `<ul class="list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`);
+						// 复制
+						el.querySelectorAll('button[data-copy-commit]').forEach(btn => {
+							btn.addEventListener('click', async () => {
+								const hash = (btn as HTMLButtonElement).getAttribute('data-copy-commit');
+								if (!hash) return;
+								try {
+									if (navigator.clipboard?.writeText) {
+										await navigator.clipboard.writeText(hash);
+									} else {
+										const textarea = document.createElement('textarea');
+										textarea.value = hash;
+										textarea.style.position = 'fixed';
+										textarea.style.opacity = '0';
+										document.body.appendChild(textarea);
+										textarea.select();
+										document.execCommand('copy');
+										document.body.removeChild(textarea);
+									}
+									(btn as HTMLButtonElement).textContent = '已复制';
+									setTimeout(() => {
+										(btn as HTMLButtonElement).textContent = '复制';
+									}, 1500);
+								} catch (err) {
+									console.warn('复制提交哈希失败', err);
+									alert('复制失败，请手动选择提交 ID');
+								}
+							});
+						});
 						// 预览
 						el.querySelectorAll('button[data-preview-commit]').forEach(btn => {
 							btn.addEventListener('click', () => {
@@ -345,6 +435,87 @@ function bindActions() {
 		repo.createBranch(b);
 		refreshAll();
 	};
+
+	const tagNameInput = document.getElementById('tag-name') as HTMLInputElement | null;
+	const tagTargetInput = document.getElementById('tag-target') as HTMLInputElement | null;
+	const tagMessageInput = document.getElementById('tag-message') as HTMLInputElement | null;
+	const tagAuthorInput = document.getElementById('tag-author') as HTMLInputElement | null;
+	const tagEmailInput = document.getElementById('tag-email') as HTMLInputElement | null;
+	const tagForceInput = document.getElementById('tag-force') as HTMLInputElement | null;
+
+	const commitAuthorInput = document.getElementById('commit-author') as HTMLInputElement | null;
+	const commitEmailInput = document.getElementById('commit-email') as HTMLInputElement | null;
+
+	const createTagFromInputs = (explicitAnnotated: boolean) => {
+		if (!repo) return;
+		const name = tagNameInput?.value.trim();
+		if (!name) {
+			alert('请输入标签名');
+			return;
+		}
+		const target = tagTargetInput?.value.trim();
+		const messageRaw = tagMessageInput?.value.trim();
+		const force = !!tagForceInput?.checked;
+		const shouldAnnotated = explicitAnnotated || !!messageRaw;
+		if (shouldAnnotated && !messageRaw) {
+			alert('请填写标签说明以创建注释标签');
+			return;
+		}
+
+		try {
+			if (shouldAnnotated) {
+				const author = tagAuthorInput?.value.trim() || commitAuthorInput?.value.trim() || 'Tagger';
+				const email = tagEmailInput?.value.trim() || commitEmailInput?.value.trim() || 'tagger@example.com';
+				repo.createTag(name, {
+					commit: target || undefined,
+					message: messageRaw,
+					author,
+					email,
+					force,
+				});
+			} else {
+				repo.createTag(name, {
+					commit: target || undefined,
+					force,
+				});
+			}
+		} catch (e: any) {
+			alert(e?.message || String(e));
+			return;
+		}
+
+		refreshAll();
+	};
+
+	const btnCreateTag = document.getElementById('btn-create-tag') as HTMLButtonElement | null;
+	if (btnCreateTag) {
+		btnCreateTag.onclick = () => createTagFromInputs(false);
+	}
+
+	const btnCreateAnnotatedTag = document.getElementById('btn-create-annotated-tag') as HTMLButtonElement | null;
+	if (btnCreateAnnotatedTag) {
+		btnCreateAnnotatedTag.onclick = () => createTagFromInputs(true);
+	}
+
+	const btnDeleteTag = document.getElementById('btn-delete-tag') as HTMLButtonElement | null;
+	if (btnDeleteTag) {
+		btnDeleteTag.onclick = () => {
+			if (!repo) return;
+			const name = tagNameInput?.value.trim();
+			if (!name) {
+				alert('请输入要删除的标签名');
+				return;
+			}
+			if (!window.confirm(`确认删除标签 "${name}"？`)) return;
+			try {
+				repo.deleteTag(name);
+			} catch (e: any) {
+				alert(e?.message || String(e));
+				return;
+			}
+			refreshAll();
+		};
+	}
 
 	const btnCreateSheet = document.getElementById('btn-create-sheet') as HTMLButtonElement | null;
 	if (btnCreateSheet) {
@@ -566,6 +737,15 @@ function seedDemoSheets() {
 	if (!sheets.includes('draft')) {
 		repo.duplicateSheet('default', 'draft');
 		repo.commit('复制默认工作表', 'System', 'system@example.com');
+	}
+
+	const existingTags = repo.listTags();
+	if (!existingTags.includes('v1.0.0')) {
+		repo.createTag('v1.0.0', {
+			message: '初始数据版本',
+			author: 'System',
+			email: 'system@example.com',
+		});
 	}
 }
 

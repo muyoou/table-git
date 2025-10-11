@@ -7,7 +7,8 @@ export enum ObjectType {
   ROW = 'row',
   SHEET = 'sheet',
   TABLE = 'table',
-  COMMIT = 'commit'
+  COMMIT = 'commit',
+  TAG = 'tag'
 }
 
 /**
@@ -89,6 +90,17 @@ export interface Change {
   sheetName: string;
   details: any;
   timestamp: number;
+}
+
+export interface TagInfo {
+  name: string;
+  target: string;
+  type: 'lightweight' | 'annotated';
+  tagHash?: string;
+  message?: string;
+  author?: string;
+  email?: string;
+  timestamp?: number;
 }
 
 export interface SheetAddDetails {

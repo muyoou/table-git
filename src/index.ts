@@ -4,6 +4,7 @@ export { TableStructure } from './core/structure';
 export { SheetTree } from './core/sheet';
 export { TableTree } from './core/table-tree';
 export { CommitObject } from './core/commit';
+export { TagObject } from './core/tag';
 export { TableGit } from './core/table-git';
 export { UndoManager } from './core/undo-manager';
 export { DiffMergeEngine } from './core/diff-merge';

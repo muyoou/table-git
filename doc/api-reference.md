@@ -61,6 +61,10 @@ const repo: TableGit = createTableGit('main');
 | `checkoutCommit(hash)` | 直接切换到指定提交哈希。 |
 | `getCurrentBranch()` | 返回当前分支名（若处于 detached HEAD 则返回 `null`）。 |
 | `getBranches()` | 列出分支。 |
+| `createTag(name, options?)` | 创建标签，可指定目标提交或附加注释（`author`、`email`、`message`）；支持 `force` 覆盖。 |
+| `deleteTag(name)` | 删除现有标签。 |
+| `listTags(options?)` | 列出标签名称，传入 `{ withDetails: true }` 可获取 `TagInfo` 详情。 |
+| `getTag(name)` | 返回指定标签的 `TagInfo`（包含指向的提交、类型、注释等）。 |
 | `status()` | 返回暂存区与工作区的差异概览。 |
 | `getStagedChanges()` | 返回已暂存的变更列表。 |
 | `getCommitHistory(limit?)` | 获取提交历史，可限制数量。 |
