@@ -9,7 +9,12 @@ import {
 	htmlFormatter,
 } from '../src/index.ts';
 import { createColumn, createRow, generateId, ChangeType } from '../src/index.ts';
-import type { TagInfo } from '../src/index.ts';
+import type {
+	TagInfo,
+	TableGitExportOptions,
+	TableGitImportOptions,
+	SerializedTableGitState,
+} from '../src/index.ts';
 
 type El = HTMLElement | null;
 const $ = (id: string) => document.getElementById(id);
@@ -37,6 +42,20 @@ function renderList(elId: string, items: string[]) {
 	if (!el) return;
 	const html = `<ul class="list">${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
 	setHTML(el, html);
+}
+
+function isChecked(id: string, fallback = false): boolean {
+	const input = document.getElementById(id) as HTMLInputElement | null;
+	return input ? !!input.checked : fallback;
+}
+
+function setPersistenceStatus(message: string): void {
+	setText($("persistence-status"), message);
+}
+
+function formatExportFilename(): string {
+	const timestamp = new Date().toISOString().replace(/[:]/g, '-');
+	return `table-git-${timestamp}.json`;
 }
 
 function getSheetNames(): string[] {
@@ -428,6 +447,7 @@ function bindActions() {
 		seedDemoSheets();
 		activeSheet = 'default';
 		refreshAll();
+		setPersistenceStatus('');
 	};
 	($("btn-create-branch") as HTMLButtonElement).onclick = () => {
 		if (!repo) return;
@@ -435,6 +455,82 @@ function bindActions() {
 		repo.createBranch(b);
 		refreshAll();
 	};
+
+	const btnExport = document.getElementById('btn-export-state') as HTMLButtonElement | null;
+	const btnImport = document.getElementById('btn-import-state') as HTMLButtonElement | null;
+	const fileInput = document.getElementById('file-import') as HTMLInputElement | null;
+
+	if (btnExport) {
+		btnExport.onclick = () => {
+			if (!repo) {
+				alert('请先初始化仓库');
+				return;
+			}
+
+			const options: TableGitExportOptions = {
+				includeWorkingState: isChecked('export-include-working', true),
+				includeSnapshots: isChecked('export-include-snapshots', false),
+				includeStagedChanges: isChecked('export-include-staged', true),
+			};
+
+			try {
+				const serialized = repo.exportStateAsJSON(options);
+				const blob = new Blob([serialized], { type: 'application/json' });
+				const url = URL.createObjectURL(blob);
+				const filename = formatExportFilename();
+				const anchor = document.createElement('a');
+				anchor.href = url;
+				anchor.download = filename;
+				document.body.appendChild(anchor);
+				anchor.click();
+				document.body.removeChild(anchor);
+				setTimeout(() => URL.revokeObjectURL(url), 0);
+				setPersistenceStatus(`已导出 ${filename}`);
+			} catch (err: any) {
+				console.warn('导出仓库失败', err);
+				alert(err?.message || '导出失败');
+				setPersistenceStatus('导出失败');
+			}
+		};
+	}
+
+	if (btnImport && fileInput) {
+		btnImport.onclick = () => {
+			if (repo && !window.confirm('导入将覆盖当前演示数据，是否继续？')) {
+				return;
+			}
+			fileInput.click();
+		};
+
+		fileInput.addEventListener('change', async () => {
+			const file = fileInput.files?.[0];
+			if (!file) {
+				return;
+			}
+
+			try {
+				const text = await file.text();
+				const parsed = JSON.parse(text) as SerializedTableGitState;
+				const options: TableGitImportOptions = {
+					restoreWorkingState: isChecked('import-restore-working', true),
+					restoreSnapshots: isChecked('import-restore-snapshots', true),
+					restoreStagedChanges: isChecked('import-restore-staged', true),
+				};
+
+				const nextRepo = new TableGit();
+				nextRepo.importState(parsed, options);
+				repo = nextRepo;
+				activeSheet = 'default';
+				refreshAll();
+				setPersistenceStatus(`已导入 ${file.name}`);
+			} catch (err: any) {
+				console.warn('导入仓库失败', err);
+				alert(err?.message || '导入失败');
+				setPersistenceStatus('导入失败');
+			}
+			fileInput.value = '';
+		});
+	}
 
 	const tagNameInput = document.getElementById('tag-name') as HTMLInputElement | null;
 	const tagTargetInput = document.getElementById('tag-target') as HTMLInputElement | null;

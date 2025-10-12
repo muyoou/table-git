@@ -414,6 +414,63 @@ describe('DiffMergeEngine 多工作表差异', () => {
   });
 });
 
+describe('序列化与恢复', () => {
+  test('exportState 默认返回精简数据', () => {
+    const repo = createTableGit();
+    repo.addCellChange('default', 0, 0, 'Snapshot');
+
+    const exported = repo.exportState();
+
+    expect(exported.version).toBe(1);
+    expect(exported.head).toBe('main');
+    expect(exported.refs).toHaveProperty('main');
+    expect(exported.objects.length).toBeGreaterThan(0);
+    expect(exported.stagedChanges).toBeUndefined();
+    expect(exported.workingState).toBeUndefined();
+  });
+
+  test('exportState full 预设应包含工作区与暂存区', () => {
+    const repo = createTableGit();
+    repo.addCellChange('default', 0, 0, 'Snapshot');
+
+    const exported = repo.exportState({ preset: 'full' });
+
+    expect(exported.stagedChanges?.length).toBe(1);
+    expect(exported.workingState?.table).toBeDefined();
+  });
+
+  test('importState 应还原工作区、标签与暂存区', () => {
+    const source = createTableGit();
+    source.addCellChange('default', 0, 0, 'Alpha');
+    source.commit('写入 Alpha', 'Tester', 'tester@example.com');
+    source.createTag('v0.1.0', {
+      message: 'Alpha Release',
+      author: 'Tester',
+      email: 'tester@example.com'
+    });
+
+    source.addCellChange('default', 1, 0, 'Beta');
+
+  const exported = source.exportState({ preset: 'full', includeSnapshots: true });
+
+    const target = new TableGit();
+    target.importState(exported);
+
+    expect(target.getCurrentBranch()).toBe('main');
+    expect(target.listTags()).toContain('v0.1.0');
+    const tagInfo = target.getTag('v0.1.0') as TagInfo;
+    expect(tagInfo?.message).toBe('Alpha Release');
+
+    expect(target.getStagedChanges()).toHaveLength(1);
+    const preview = target.getPreviewSheet('default', { includeStaged: true });
+    expect(preview?.getCellHash(1, 0)).toBeDefined();
+
+    const commitHash = target.commit('同步 Beta', 'Tester', 'tester@example.com');
+    expect(commitHash).toBeDefined();
+    expect(target.getCellValue(1, 0)).toBe('Beta');
+  });
+});
+
 describe('标签系统操作', () => {
   let repo: TableGit;
 

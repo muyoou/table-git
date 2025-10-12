@@ -103,6 +103,74 @@ export interface TagInfo {
   timestamp?: number;
 }
 
+export interface SerializedTagEntry {
+  commit: string;
+  type: 'lightweight' | 'annotated';
+  tagHash?: string;
+  message?: string;
+  author?: string;
+  email?: string;
+  timestamp?: number;
+}
+
+export interface SerializedObjectEntry {
+  hash: string;
+  type: string;
+  payload: any;
+}
+
+export interface SerializedChange {
+  type: ChangeType;
+  sheetName: string;
+  details: any;
+  timestamp: number;
+}
+
+export interface SerializedStagedChange {
+  key: string;
+  change: SerializedChange;
+}
+
+export interface SerializedTableGitState {
+  version: number;
+  head: string;
+  refs: Record<string, string>;
+  tags: Record<string, SerializedTagEntry>;
+  objects: SerializedObjectEntry[];
+  stagedChanges?: SerializedStagedChange[];
+  snapshots?: { commit: string; table: any }[];
+  workingState?: {
+    table?: any;
+    sheets?: Record<string, any>;
+  };
+}
+
+export interface TableGitExportOptions {
+  includeWorkingState?: boolean;
+  includeSnapshots?: boolean;
+  includeStagedChanges?: boolean;
+  preset?: 'minimal' | 'full';
+  roots?: TableGitExportRoots;
+  stripDefaults?: boolean;
+  stripTagDetails?: boolean;
+  pretty?: boolean;
+}
+
+export interface TableGitImportOptions {
+  restoreWorkingState?: boolean;
+  restoreSnapshots?: boolean;
+  restoreStagedChanges?: boolean;
+}
+
+export interface TableGitExportRoots {
+  branches?: string[];
+  tags?: string[];
+  commits?: string[];
+  includeHead?: boolean;
+  includeAllBranches?: boolean;
+  includeAllTags?: boolean;
+}
+
 export interface SheetAddDetails {
   order?: number;
   meta?: Record<string, unknown>;

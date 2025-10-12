@@ -40,6 +40,34 @@
           <button id="btn-init" class="primary">初始化示例数据</button>
         </div>
         <div class="controls">
+          <button id="btn-export-state">导出仓库到文件</button>
+          <button id="btn-import-state">从文件导入</button>
+        </div>
+        <div class="controls" style="gap:6px">
+          <label class="muted" style="display:flex;align-items:center;gap:4px">
+            <input id="export-include-working" type="checkbox" checked /> 包含工作区
+          </label>
+          <label class="muted" style="display:flex;align-items:center;gap:4px">
+            <input id="export-include-staged" type="checkbox" checked /> 包含暂存区
+          </label>
+          <label class="muted" style="display:flex;align-items:center;gap:4px">
+            <input id="export-include-snapshots" type="checkbox" /> 包含快照
+          </label>
+        </div>
+        <div class="controls" style="gap:6px">
+          <label class="muted" style="display:flex;align-items:center;gap:4px">
+            <input id="import-restore-working" type="checkbox" checked /> 恢复工作区
+          </label>
+          <label class="muted" style="display:flex;align-items:center;gap:4px">
+            <input id="import-restore-staged" type="checkbox" checked /> 恢复暂存区
+          </label>
+          <label class="muted" style="display:flex;align-items:center;gap:4px">
+            <input id="import-restore-snapshots" type="checkbox" checked /> 恢复快照
+          </label>
+        </div>
+        <div id="persistence-status" class="muted"></div>
+        <input id="file-import" type="file" accept="application/json" style="display:none" />
+        <div class="controls">
           <input id="branch" placeholder="分支名" value="price-update" />
           <button id="btn-create-branch">创建分支</button>
         </div>

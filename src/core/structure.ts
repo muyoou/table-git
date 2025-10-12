@@ -225,6 +225,37 @@ export class TableStructure {
     structure.rows = new Map(json.rows);
     structure.columnOrder = json.columnOrder;
     structure.rowOrder = json.rowOrder;
+    structure.columns.forEach((column, id) => {
+      if (!column) {
+        return;
+      }
+      if (column.dataType === undefined) {
+        column.dataType = 'mixed';
+      }
+      if (column.width === undefined) {
+        column.width = 120;
+      }
+      if (column.hidden === undefined) {
+        column.hidden = false;
+      }
+      if (typeof column.order !== 'number' || !Number.isFinite(column.order)) {
+        column.order = structure.columnOrder.indexOf(id);
+      }
+    });
+    structure.rows.forEach((row, id) => {
+      if (!row) {
+        return;
+      }
+      if (row.height === undefined) {
+        row.height = 25;
+      }
+      if (row.hidden === undefined) {
+        row.hidden = false;
+      }
+      if (typeof row.order !== 'number' || !Number.isFinite(row.order)) {
+        row.order = structure.rowOrder.indexOf(id);
+      }
+    });
     structure.updateHash();
     return structure;
   }

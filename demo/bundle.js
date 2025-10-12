@@ -1,4 +1,4 @@
-// build-version:1760025145450
+// build-version:1760255446872
 "use strict";
 (() => {
   var __create = Object.create;
@@ -535,6 +535,9 @@
     if (Array.isArray(value)) {
       return value.map((item) => normalize(item));
     }
+    if (value instanceof Set) {
+      return Array.from(value).map((item) => normalize(item)).sort();
+    }
     if (value instanceof Date) {
       return value.toISOString();
     }
@@ -543,6 +546,9 @@
         const entries = Array.from(value.entries()).map(([key, val]) => [key, normalize(val)]);
         entries.sort(([a], [b]) => a > b ? 1 : a < b ? -1 : 0);
         return entries;
+      }
+      if (value instanceof RegExp) {
+        return value.toString();
       }
       const sortedKeys = Object.keys(value).sort();
       const result = {};
@@ -553,6 +559,13 @@
     }
     return value;
   }
+  function isPlainObject(value) {
+    if (value === null || typeof value !== "object") {
+      return false;
+    }
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+  }
   function calculateHash(obj) {
     const normalized = normalize(obj);
     const content = JSON.stringify(normalized);
@@ -560,11 +573,79 @@
   }
   function generateId(prefix = "") {
     const timestamp = Date.now().toString(36);
-    const random = Math.random().toString(36).substr(2, 5);
-    return `${prefix}${timestamp}_${random}`;
+    let randomSegment;
+    const globalCrypto = typeof globalThis !== "undefined" ? globalThis.crypto : void 0;
+    if (globalCrypto?.randomUUID) {
+      randomSegment = globalCrypto.randomUUID().split("-")[0];
+    } else if (globalCrypto?.getRandomValues) {
+      const array = new Uint32Array(2);
+      globalCrypto.getRandomValues(array);
+      randomSegment = Array.from(array).map((num) => num.toString(36)).join("").slice(0, 8);
+    } else {
+      randomSegment = Math.random().toString(36).slice(2, 10);
+    }
+    return `${prefix}${timestamp}_${randomSegment}`;
   }
   function deepClone(obj) {
-    return JSON.parse(JSON.stringify(obj));
+    const visited = /* @__PURE__ */ new WeakMap();
+    const clone = (value) => {
+      if (value === null || typeof value !== "object") {
+        return value;
+      }
+      if (value instanceof Date) {
+        return new Date(value.getTime());
+      }
+      if (value instanceof RegExp) {
+        const flags = value.flags;
+        return new RegExp(value.source, flags);
+      }
+      if (value instanceof Map) {
+        if (visited.has(value)) {
+          return visited.get(value);
+        }
+        const result = /* @__PURE__ */ new Map();
+        visited.set(value, result);
+        value.forEach((mapValue, mapKey) => {
+          result.set(mapKey, clone(mapValue));
+        });
+        return result;
+      }
+      if (value instanceof Set) {
+        if (visited.has(value)) {
+          return visited.get(value);
+        }
+        const result = /* @__PURE__ */ new Set();
+        visited.set(value, result);
+        value.forEach((item) => {
+          result.add(clone(item));
+        });
+        return result;
+      }
+      if (Array.isArray(value)) {
+        if (visited.has(value)) {
+          return visited.get(value);
+        }
+        const result = [];
+        visited.set(value, result);
+        value.forEach((item, index) => {
+          result[index] = clone(item);
+        });
+        return result;
+      }
+      if (isPlainObject(value)) {
+        if (visited.has(value)) {
+          return visited.get(value);
+        }
+        const result = {};
+        visited.set(value, result);
+        for (const key of Object.keys(value)) {
+          result[key] = clone(value[key]);
+        }
+        return result;
+      }
+      return value;
+    };
+    return clone(obj);
   }
   function parsePosition(position) {
     const [row, col] = position.split(",").map(Number);
@@ -819,6 +900,37 @@
       structure.rows = new Map(json.rows);
       structure.columnOrder = json.columnOrder;
       structure.rowOrder = json.rowOrder;
+      structure.columns.forEach((column, id) => {
+        if (!column) {
+          return;
+        }
+        if (column.dataType === void 0) {
+          column.dataType = "mixed";
+        }
+        if (column.width === void 0) {
+          column.width = 120;
+        }
+        if (column.hidden === void 0) {
+          column.hidden = false;
+        }
+        if (typeof column.order !== "number" || !Number.isFinite(column.order)) {
+          column.order = structure.columnOrder.indexOf(id);
+        }
+      });
+      structure.rows.forEach((row, id) => {
+        if (!row) {
+          return;
+        }
+        if (row.height === void 0) {
+          row.height = 25;
+        }
+        if (row.hidden === void 0) {
+          row.hidden = false;
+        }
+        if (typeof row.order !== "number" || !Number.isFinite(row.order)) {
+          row.order = structure.rowOrder.indexOf(id);
+        }
+      });
       structure.updateHash();
       return structure;
     }
@@ -1244,12 +1356,79 @@ Date: ${date}`;
     }
   };
 
+  // src/core/tag.ts
+  var TagObject = class _TagObject {
+    constructor(name, target, options) {
+      this.type = "tag" /* TAG */;
+      this.name = name;
+      this.target = target;
+      this.message = options?.message;
+      this.author = options?.author;
+      this.email = options?.email;
+      this.timestamp = options?.timestamp ?? Date.now();
+      this.hash = this.calculateHash();
+    }
+    calculateHash() {
+      return calculateHash({
+        type: this.type,
+        name: this.name,
+        target: this.target,
+        message: this.message,
+        author: this.author,
+        email: this.email,
+        timestamp: this.timestamp
+      });
+    }
+    getShortHash() {
+      return this.hash.substring(0, 7);
+    }
+    format() {
+      const date = new Date(this.timestamp).toLocaleString();
+      const header = `${this.name} -> ${this.target.substring(0, 7)}`;
+      if (!this.message) {
+        return `${header}
+Date: ${date}`;
+      }
+      const authorLine = this.author ? `Author: ${this.author}${this.email ? ` <${this.email}>` : ""}` : void 0;
+      return [header, authorLine, `Date: ${date}`, "", this.message].filter(Boolean).join("\n");
+    }
+    toJSON() {
+      return {
+        type: this.type,
+        name: this.name,
+        target: this.target,
+        message: this.message,
+        author: this.author,
+        email: this.email,
+        timestamp: this.timestamp,
+        hash: this.hash
+      };
+    }
+    static fromJSON(json) {
+      const tag = new _TagObject(json.name, json.target, {
+        message: json.message,
+        author: json.author,
+        email: json.email,
+        timestamp: json.timestamp
+      });
+      tag.hash = json.hash;
+      return tag;
+    }
+  };
+
   // src/core/table-git.ts
-  var TableGit = class {
-    // 提交对应的表快照
+  var TableGit = class _TableGit {
+    static {
+      // 提交对应的表快照
+      this.SERIALIZATION_VERSION = 1;
+    }
+    static {
+      this.SERIALIZED_DETAIL_TYPE_KEY = "__tableGitType";
+    }
     constructor() {
       this.objects = /* @__PURE__ */ new Map();
       this.refs = /* @__PURE__ */ new Map();
+      this.tags = /* @__PURE__ */ new Map();
       this.head = "main";
       this.index = /* @__PURE__ */ new Map();
       this.workingTable = null;
@@ -1262,6 +1441,7 @@ Date: ${date}`;
     init(branchName = "main", options) {
       this.head = branchName;
       this.refs.set(branchName, "");
+      this.tags.clear();
       const table = new TableTree();
       if (options?.createDefaultSheet ?? true) {
         const sheetName = options?.defaultSheetName ?? "default";
@@ -1421,13 +1601,38 @@ Date: ${date}`;
     // ========== 列操作 ==========
     addColumn(sheetName, column) {
       this.ensureSheetExists(sheetName);
-      const changeKey = `${sheetName}:column:add:${column.id}`;
+      const normalized = this.normalizeColumnMetadata(sheetName, column);
+      const changeKey = `${sheetName}:column:add:${normalized.id}`;
       this.index.set(changeKey, {
         type: "column_add" /* COLUMN_ADD */,
         sheetName,
-        details: column,
+        details: normalized,
         timestamp: Date.now()
       });
+    }
+    getNextColumnOrder(sheetName, options) {
+      this.ensureSheetExists(sheetName);
+      const includeStaged = options?.includeStaged ?? true;
+      const sheet = this.getPreviewSheet(sheetName, { includeStaged });
+      if (!sheet) {
+        return 0;
+      }
+      let maxOrder = Number.NEGATIVE_INFINITY;
+      const columnIds = sheet.structure.getColumnIds();
+      for (const id of columnIds) {
+        const meta = sheet.structure.getColumn(id);
+        if (meta && typeof meta.order === "number") {
+          maxOrder = Math.max(maxOrder, meta.order);
+        }
+      }
+      if (maxOrder > Number.NEGATIVE_INFINITY) {
+        return maxOrder + 1;
+      }
+      const bounds = sheet.getBounds();
+      if (bounds) {
+        return bounds.maxCol + 1;
+      }
+      return 0;
     }
     updateColumn(sheetName, columnId, updates) {
       this.ensureSheetExists(sheetName);
@@ -1449,16 +1654,95 @@ Date: ${date}`;
         timestamp: Date.now()
       });
     }
+    moveColumn(sheetName, columnId, newIndex) {
+      this.ensureSheetExists(sheetName);
+      if (!Number.isInteger(newIndex) || newIndex < 0) {
+        throw new Error("Column index must be a non-negative integer");
+      }
+      const changeKey = `${sheetName}:column:move:${columnId}`;
+      this.index.set(changeKey, {
+        type: "column_move" /* COLUMN_MOVE */,
+        sheetName,
+        details: { columnId, newIndex },
+        timestamp: Date.now()
+      });
+    }
+    deleteColumnByIndex(sheetName, columnIndex, options) {
+      this.ensureSheetExists(sheetName);
+      if (!Number.isInteger(columnIndex) || columnIndex < 0) {
+        throw new Error("Column index must be a non-negative integer");
+      }
+      const includeStaged = options?.includeStaged ?? true;
+      let sheet = this.getPreviewSheet(sheetName, { includeStaged });
+      if (!sheet) {
+        throw new Error(`Sheet '${sheetName}' does not exist`);
+      }
+      const columnIds = sheet.structure.getColumnIds();
+      if (columnIds.length > 0) {
+        if (columnIndex >= columnIds.length) {
+          throw new Error(`Column index ${columnIndex} is out of bounds`);
+        }
+        const columnId = columnIds[columnIndex];
+        this.deleteColumn(sheetName, columnId);
+        return;
+      }
+      const bounds = sheet.getBounds();
+      if (!bounds) {
+        throw new Error(`Sheet '${sheetName}' has no data to infer columns from`);
+      }
+      const totalColumns = bounds.maxCol - bounds.minCol + 1;
+      if (columnIndex >= totalColumns) {
+        throw new Error(`Column index ${columnIndex} is out of bounds`);
+      }
+      const columnOrder = bounds.minCol + columnIndex;
+      const changeKeyBase = `${sheetName}:column:delete-order:${columnOrder}`;
+      let changeKey = changeKeyBase;
+      let counter = 1;
+      while (this.index.has(changeKey)) {
+        changeKey = `${changeKeyBase}:${counter++}`;
+      }
+      this.index.set(changeKey, {
+        type: "column_delete" /* COLUMN_DELETE */,
+        sheetName,
+        details: { columnOrder },
+        timestamp: Date.now()
+      });
+    }
     // ========== 行操作 ==========
     addRow(sheetName, row) {
       this.ensureSheetExists(sheetName);
-      const changeKey = `${sheetName}:row:add:${row.id}`;
+      const normalized = this.normalizeRowMetadata(sheetName, row);
+      const changeKey = `${sheetName}:row:add:${normalized.id}`;
       this.index.set(changeKey, {
         type: "row_add" /* ROW_ADD */,
         sheetName,
-        details: row,
+        details: normalized,
         timestamp: Date.now()
       });
+    }
+    getNextRowOrder(sheetName, options) {
+      this.ensureSheetExists(sheetName);
+      const includeStaged = options?.includeStaged ?? true;
+      const sheet = this.getPreviewSheet(sheetName, { includeStaged });
+      if (!sheet) {
+        return 0;
+      }
+      let maxOrder = Number.NEGATIVE_INFINITY;
+      const rowIds = sheet.structure.getRowIds();
+      for (const id of rowIds) {
+        const meta = sheet.structure.getRow(id);
+        if (meta && typeof meta.order === "number") {
+          maxOrder = Math.max(maxOrder, meta.order);
+        }
+      }
+      if (maxOrder > Number.NEGATIVE_INFINITY) {
+        return maxOrder + 1;
+      }
+      const bounds = sheet.getBounds();
+      if (bounds) {
+        return bounds.maxRow + 1;
+      }
+      return 0;
     }
     deleteRow(sheetName, rowId) {
       this.ensureSheetExists(sheetName);
@@ -1467,6 +1751,47 @@ Date: ${date}`;
         type: "row_delete" /* ROW_DELETE */,
         sheetName,
         details: { rowId },
+        timestamp: Date.now()
+      });
+    }
+    deleteRowByIndex(sheetName, rowIndex, options) {
+      this.ensureSheetExists(sheetName);
+      if (!Number.isInteger(rowIndex) || rowIndex < 0) {
+        throw new Error("Row index must be a non-negative integer");
+      }
+      const includeStaged = options?.includeStaged ?? true;
+      let sheet = this.getPreviewSheet(sheetName, { includeStaged });
+      if (!sheet) {
+        throw new Error(`Sheet '${sheetName}' does not exist`);
+      }
+      const rowIds = sheet.structure.getRowIds();
+      if (rowIds.length > 0) {
+        if (rowIndex >= rowIds.length) {
+          throw new Error(`Row index ${rowIndex} is out of bounds`);
+        }
+        const rowId = rowIds[rowIndex];
+        this.deleteRow(sheetName, rowId);
+        return;
+      }
+      const bounds = sheet.getBounds();
+      if (!bounds) {
+        throw new Error(`Sheet '${sheetName}' has no data to infer rows from`);
+      }
+      const totalRows = bounds.maxRow - bounds.minRow + 1;
+      if (rowIndex >= totalRows) {
+        throw new Error(`Row index ${rowIndex} is out of bounds`);
+      }
+      const rowOrder = bounds.minRow + rowIndex;
+      const changeKeyBase = `${sheetName}:row:delete-order:${rowOrder}`;
+      let changeKey = changeKeyBase;
+      let counter = 1;
+      while (this.index.has(changeKey)) {
+        changeKey = `${changeKeyBase}:${counter++}`;
+      }
+      this.index.set(changeKey, {
+        type: "row_delete" /* ROW_DELETE */,
+        sheetName,
+        details: { rowOrder },
         timestamp: Date.now()
       });
     }
@@ -1600,18 +1925,38 @@ Date: ${date}`;
         }
         case "column_delete" /* COLUMN_DELETE */: {
           const sheet = this.getMutableSheet(table, sheets, change.sheetName);
-          const columnId = change.details.columnId;
-          const column = sheet.structure.getColumn(columnId);
-          if (column && typeof column.order === "number") {
-            const columnIndex = column.order;
+          const details = change.details ?? {};
+          let targetColumnId = details.columnId;
+          let targetOrder;
+          if (typeof details.columnOrder === "number") {
+            targetOrder = details.columnOrder;
+          } else if (typeof details.columnIndex === "number") {
+            targetOrder = details.columnIndex;
+          }
+          if (targetColumnId) {
+            const column = sheet.structure.getColumn(targetColumnId);
+            if (column && typeof column.order === "number") {
+              targetOrder = column.order;
+            }
+          } else if (typeof targetOrder === "number") {
+            targetColumnId = this.findColumnIdByOrder(sheet, targetOrder);
+          }
+          if (typeof targetOrder === "number") {
             const cells = sheet.getAllCellPositions();
             for (const { row, col } of cells) {
-              if (col === columnIndex) {
+              if (col === targetOrder) {
                 sheet.deleteCell(row, col);
               }
             }
           }
-          sheet.structure.removeColumn(columnId);
+          if (targetColumnId) {
+            sheet.structure.removeColumn(targetColumnId);
+          } else if (typeof targetOrder === "number") {
+            const fallbackId = this.findColumnIdByOrder(sheet, targetOrder);
+            if (fallbackId) {
+              sheet.structure.removeColumn(fallbackId);
+            }
+          }
           break;
         }
         case "column_move" /* COLUMN_MOVE */: {
@@ -1626,18 +1971,38 @@ Date: ${date}`;
         }
         case "row_delete" /* ROW_DELETE */: {
           const sheet = this.getMutableSheet(table, sheets, change.sheetName);
-          const rowId = change.details.rowId;
-          const row = sheet.structure.getRow(rowId);
-          if (row && typeof row.order === "number") {
-            const rowIndex = row.order;
+          const details = change.details ?? {};
+          let targetRowId = details.rowId;
+          let targetOrder;
+          if (typeof details.rowOrder === "number") {
+            targetOrder = details.rowOrder;
+          } else if (typeof details.rowIndex === "number") {
+            targetOrder = details.rowIndex;
+          }
+          if (targetRowId) {
+            const row = sheet.structure.getRow(targetRowId);
+            if (row && typeof row.order === "number") {
+              targetOrder = row.order;
+            }
+          } else if (typeof targetOrder === "number") {
+            targetRowId = this.findRowIdByOrder(sheet, targetOrder);
+          }
+          if (typeof targetOrder === "number") {
             const cells = sheet.getAllCellPositions();
             for (const { row: r, col } of cells) {
-              if (r === rowIndex) {
+              if (r === targetOrder) {
                 sheet.deleteCell(r, col);
               }
             }
           }
-          sheet.structure.removeRow(rowId);
+          if (targetRowId) {
+            sheet.structure.removeRow(targetRowId);
+          } else if (typeof targetOrder === "number") {
+            const fallbackId = this.findRowIdByOrder(sheet, targetOrder);
+            if (fallbackId) {
+              sheet.structure.removeRow(fallbackId);
+            }
+          }
           break;
         }
         case "row_sort" /* ROW_SORT */: {
@@ -1675,6 +2040,53 @@ Date: ${date}`;
       const sortedOrder = [...currentOrder].sort((a, b) => a.localeCompare(b));
       sheet.structure.sortRows(sortedOrder);
     }
+    normalizeColumnMetadata(sheetName, column) {
+      const normalized = deepClone(column);
+      if (!normalized.id) {
+        normalized.id = generateId("col_");
+      }
+      if (typeof normalized.order !== "number" || !Number.isFinite(normalized.order)) {
+        normalized.order = this.getNextColumnOrder(sheetName);
+      }
+      if (typeof normalized.width !== "number" || normalized.width <= 0) {
+        normalized.width = 120;
+      }
+      if (!normalized.dataType) {
+        normalized.dataType = "mixed";
+      }
+      return normalized;
+    }
+    normalizeRowMetadata(sheetName, row) {
+      const normalized = deepClone(row);
+      if (!normalized.id) {
+        normalized.id = generateId("row_");
+      }
+      if (typeof normalized.order !== "number" || !Number.isFinite(normalized.order)) {
+        normalized.order = this.getNextRowOrder(sheetName);
+      }
+      if (typeof normalized.height !== "number" || normalized.height <= 0) {
+        normalized.height = 25;
+      }
+      return normalized;
+    }
+    findColumnIdByOrder(sheet, order) {
+      for (const id of sheet.structure.getColumnIds()) {
+        const meta = sheet.structure.getColumn(id);
+        if (meta && typeof meta.order === "number" && meta.order === order) {
+          return id;
+        }
+      }
+      return void 0;
+    }
+    findRowIdByOrder(sheet, order) {
+      for (const id of sheet.structure.getRowIds()) {
+        const meta = sheet.structure.getRow(id);
+        if (meta && typeof meta.order === "number" && meta.order === order) {
+          return id;
+        }
+      }
+      return void 0;
+    }
     // ========== 对象存储 ==========
     storeObject(obj) {
       const hash = obj.hash;
@@ -1693,6 +2105,10 @@ Date: ${date}`;
       }
       if (obj instanceof CommitObject) {
         this.objects.set(hash, { type: "commit" /* COMMIT */, payload: obj.toJSON() });
+        return hash;
+      }
+      if (obj instanceof TagObject) {
+        this.objects.set(hash, { type: "tag" /* TAG */, payload: obj.toJSON() });
         return hash;
       }
       this.objects.set(hash, { type: obj.type ?? "raw", payload: obj });
@@ -1718,7 +2134,106 @@ Date: ${date}`;
       if (entry.type === "commit" /* COMMIT */) {
         return CommitObject.fromJSON(entry.payload);
       }
+      if (entry.type === "tag" /* TAG */) {
+        return TagObject.fromJSON(entry.payload);
+      }
       return entry.payload;
+    }
+    // ========== 标签操作 ==========
+    createTag(tagName, options) {
+      this.validateTagName(tagName);
+      if (!options?.force && this.tags.has(tagName)) {
+        throw new Error(`Tag '${tagName}' already exists`);
+      }
+      const targetCommit = this.resolveCommitHash(options?.commit);
+      if (!targetCommit) {
+        throw new Error("Cannot create tag: no commit specified and repository has no commits");
+      }
+      const commitObject = this.getObject(targetCommit);
+      if (!(commitObject instanceof CommitObject)) {
+        throw new Error(`Cannot create tag: commit '${targetCommit}' does not exist`);
+      }
+      if (options?.message || options?.author || options?.email) {
+        const tagAuthor = options.author ?? "Unknown";
+        const tagEmail = options.email ?? "unknown@example.com";
+        const tag = new TagObject(tagName, commitObject.hash, {
+          message: options.message,
+          author: tagAuthor,
+          email: tagEmail
+        });
+        const tagHash = this.storeObject(tag);
+        this.tags.set(tagName, { commit: commitObject.hash, type: "annotated", tagHash });
+        return commitObject.hash;
+      }
+      this.tags.set(tagName, { commit: commitObject.hash, type: "lightweight" });
+      return commitObject.hash;
+    }
+    deleteTag(tagName) {
+      if (!this.tags.delete(tagName)) {
+        throw new Error(`Tag '${tagName}' does not exist`);
+      }
+    }
+    getTag(tagName) {
+      const tagEntry = this.tags.get(tagName);
+      if (!tagEntry) {
+        return void 0;
+      }
+      const base = {
+        name: tagName,
+        target: tagEntry.commit,
+        type: tagEntry.type
+      };
+      if (tagEntry.type === "annotated" && tagEntry.tagHash) {
+        const tagObject = this.getObject(tagEntry.tagHash);
+        if (tagObject) {
+          base.tagHash = tagObject.hash;
+          base.message = tagObject.message;
+          base.author = tagObject.author;
+          base.email = tagObject.email;
+          base.timestamp = tagObject.timestamp;
+        }
+      }
+      return base;
+    }
+    listTags(options) {
+      const names = Array.from(this.tags.keys()).sort();
+      if (!options?.withDetails) {
+        return names;
+      }
+      const details = [];
+      for (const name of names) {
+        const info = this.getTag(name);
+        if (info) {
+          details.push(info);
+        }
+      }
+      return details;
+    }
+    validateTagName(tagName) {
+      if (!tagName || typeof tagName !== "string") {
+        throw new Error("Tag name must be a non-empty string");
+      }
+      const invalidPattern = /[~^:\\?*\s]/;
+      if (invalidPattern.test(tagName)) {
+        throw new Error(`Tag name '${tagName}' contains invalid characters`);
+      }
+    }
+    resolveCommitHash(reference) {
+      if (!reference) {
+        return this.getCurrentCommitHash();
+      }
+      if (this.refs.has(reference)) {
+        return this.refs.get(reference);
+      }
+      const tagRef = this.tags.get(reference);
+      if (tagRef) {
+        return tagRef.commit;
+      }
+      const possibleCommit = this.getObject(reference);
+      if (possibleCommit instanceof CommitObject) {
+        return possibleCommit.hash;
+      }
+      return void 0;
     }
     // ========== 快照 ==========
     getTreeSnapshot(ref) {
@@ -1902,6 +2417,149 @@ Date: ${date}`;
       if (!cellHash) return void 0;
       return this.getObject(cellHash);
     }
+    // ========== 序列化与恢复 ==========
+    exportState(options) {
+      const config = this.resolveExportOptions(options);
+      const refsRecord = Object.fromEntries(this.refs);
+      const tagsRecord = {};
+      for (const [name, tagEntry] of this.tags.entries()) {
+        tagsRecord[name] = this.serializeTagEntry(tagEntry, !config.stripTagDetails);
+      }
+      const reachableHashes = config.limitObjects ? this.collectReachableObjectHashes({
+        roots: config.roots,
+        includeWorkingState: config.includeWorkingState,
+        includeSnapshots: config.includeSnapshots,
+        includeStagedChanges: config.includeStagedChanges,
+        includeAnnotatedTags: true
+      }) : new Set(Array.from(this.objects.keys()));
+      const objects = [];
+      const sortedHashes = Array.from(reachableHashes.values()).sort();
+      for (const hash of sortedHashes) {
+        const entry = this.objects.get(hash);
+        if (!entry) continue;
+        const normalized = this.cloneStoredObject(entry, { stripDefaults: config.stripDefaults });
+        objects.push({
+          hash,
+          type: normalized.type,
+          payload: normalized.payload
+        });
+      }
+      const state = {
+        version: _TableGit.SERIALIZATION_VERSION,
+        head: this.head,
+        refs: refsRecord,
+        tags: tagsRecord,
+        objects
+      };
+      if (config.includeStagedChanges && this.index.size > 0) {
+        state.stagedChanges = Array.from(this.index.entries()).map(([key, change]) => {
+          return {
+            key,
+            change: this.serializeChange(change)
+          };
+        });
+      }
+      if (config.includeSnapshots && this.tableSnapshots.size > 0) {
+        state.snapshots = Array.from(this.tableSnapshots.entries()).map(([commit, table]) => {
+          return {
+            commit,
+            table: table.toJSON()
+          };
+        });
+      }
+      if (config.includeWorkingState) {
+        const workingState = {};
+        if (this.workingTable) {
+          workingState.table = this.workingTable.toJSON();
+        }
+        if (this.workingSheets.size > 0) {
+          const sheetRecord = {};
+          for (const [name, sheet] of this.workingSheets.entries()) {
+            sheetRecord[name] = sheet.toJSON();
+          }
+          workingState.sheets = sheetRecord;
+        }
+        if (Object.keys(workingState).length > 0) {
+          state.workingState = workingState;
+        }
+      }
+      return state;
+    }
+    exportStateAsJSON(options) {
+      const state = this.exportState(options);
+      const indent = options?.pretty ? 2 : void 0;
+      return JSON.stringify(state, void 0, indent);
+    }
+    importState(state, options) {
+      if (!state || typeof state !== "object") {
+        throw new Error("Invalid state data: expected an object");
+      }
+      const restoreWorkingState = options?.restoreWorkingState ?? true;
+      const restoreSnapshots = options?.restoreSnapshots ?? true;
+      const restoreStagedChanges = options?.restoreStagedChanges ?? true;
+      const version = state.version ?? 1;
+      if (version > _TableGit.SERIALIZATION_VERSION) {
+        throw new Error(
+          `State version ${version} is newer than supported version ${_TableGit.SERIALIZATION_VERSION}`
+        );
+      }
+      this.head = state.head ?? "main";
+      this.refs = new Map(Object.entries(state.refs ?? {}));
+      this.tags = /* @__PURE__ */ new Map();
+      const serializedTags = state.tags ?? {};
+      for (const [name, entry] of Object.entries(serializedTags)) {
+        if (!entry?.commit || !entry.type) {
+          continue;
+        }
+        this.tags.set(name, {
+          commit: entry.commit,
+          type: entry.type,
+          tagHash: entry.tagHash
+        });
+      }
+      this.objects = /* @__PURE__ */ new Map();
+      for (const entry of state.objects ?? []) {
+        if (!entry?.hash) {
+          continue;
+        }
+        this.objects.set(entry.hash, {
+          type: entry.type,
+          payload: deepClone(entry.payload)
+        });
+      }
+      this.index = /* @__PURE__ */ new Map();
+      if (restoreStagedChanges && state.stagedChanges) {
+        for (const staged of state.stagedChanges) {
+          if (!staged?.key || !staged.change) {
+            continue;
+          }
+          this.index.set(staged.key, this.hydrateChange(staged.change));
+        }
+      }
+      this.tableSnapshots = /* @__PURE__ */ new Map();
+      if (restoreSnapshots && state.snapshots) {
+        for (const snapshot of state.snapshots) {
+          if (!snapshot?.commit || !snapshot.table) {
+            continue;
+          }
+          this.tableSnapshots.set(snapshot.commit, TableTree.fromJSON(snapshot.table));
+        }
+      }
+      const hasWorkingState = restoreWorkingState && state.workingState?.table;
+      if (hasWorkingState) {
+        const table = TableTree.fromJSON(state.workingState?.table);
+        const overrides = /* @__PURE__ */ new Map();
+        const serializedSheets = state.workingState?.sheets ?? {};
+        for (const [name, sheetJson] of Object.entries(serializedSheets)) {
+          overrides.set(name, SheetTree.fromJSON(sheetJson));
+        }
+        this.loadWorkingState(table, overrides.size > 0 ? overrides : void 0);
+      } else {
+        this.workingTable = null;
+        this.workingSheets = /* @__PURE__ */ new Map();
+        this.loadWorkingTree();
+      }
+    }
     // ========== 内部工具 ==========
     loadWorkingState(table, sheetOverrides) {
       this.workingTable = table.clone();
@@ -1936,6 +2594,311 @@ Date: ${date}`;
         return true;
       }
       return false;
+    }
+    resolveExportOptions(options) {
+      const preset = options?.preset ?? "minimal";
+      const normalizeSet = (values) => {
+        if (!values) return void 0;
+        const unique = /* @__PURE__ */ new Set();
+        for (const value of values) {
+          if (typeof value === "string" && value.trim().length > 0) {
+            unique.add(value.trim());
+          }
+        }
+        return unique.size > 0 ? Array.from(unique) : void 0;
+      };
+      const roots = {
+        includeHead: options?.roots?.includeHead ?? true,
+        includeAllBranches: options?.roots?.includeAllBranches ?? false,
+        includeAllTags: options?.roots?.includeAllTags ?? false,
+        branches: normalizeSet(options?.roots?.branches),
+        tags: normalizeSet(options?.roots?.tags),
+        commits: normalizeSet(options?.roots?.commits)
+      };
+      const includeWorkingState = options?.includeWorkingState ?? preset === "full";
+      const includeSnapshots = options?.includeSnapshots ?? false;
+      const includeStagedChanges = options?.includeStagedChanges ?? preset === "full";
+      const stripDefaults = options?.stripDefaults ?? preset === "minimal";
+      const stripTagDetails = options?.stripTagDetails ?? preset === "minimal";
+      const limitObjects = preset === "minimal" || !!options?.roots;
+      return {
+        preset,
+        includeWorkingState,
+        includeSnapshots,
+        includeStagedChanges,
+        roots,
+        stripDefaults,
+        stripTagDetails,
+        limitObjects
+      };
+    }
+    resolveExportRoots(roots) {
+      const commits = /* @__PURE__ */ new Set();
+      const includeHead = roots.includeHead ?? true;
+      if (includeHead) {
+        const headCommit = this.getCurrentCommitHash();
+        if (headCommit) {
+          commits.add(headCommit);
+        }
+      }
+      if (roots.includeAllBranches) {
+        for (const hash of this.refs.values()) {
+          if (hash) {
+            commits.add(hash);
+          }
+        }
+      }
+      if (roots.branches) {
+        for (const branch of roots.branches) {
+          const hash = this.refs.get(branch);
+          if (hash) {
+            commits.add(hash);
+          }
+        }
+      }
+      if (roots.includeAllTags) {
+        for (const entry of this.tags.values()) {
+          if (entry.commit) {
+            commits.add(entry.commit);
+          }
+        }
+      }
+      if (roots.tags) {
+        for (const tagName of roots.tags) {
+          const tag = this.tags.get(tagName);
+          if (tag?.commit) {
+            commits.add(tag.commit);
+          }
+        }
+      }
+      if (roots.commits) {
+        for (const commit of roots.commits) {
+          if (commit) {
+            commits.add(commit);
+          }
+        }
+      }
+      return commits;
+    }
+    collectReachableObjectHashes(input) {
+      const reachable = /* @__PURE__ */ new Set();
+      const visitedCommits = /* @__PURE__ */ new Set();
+      const processedTables = /* @__PURE__ */ new Set();
+      const processedSheets = /* @__PURE__ */ new Set();
+      const roots = this.resolveExportRoots(input.roots);
+      for (const commitHash of roots) {
+        this.collectCommitObjects(commitHash, visitedCommits, reachable, processedTables, processedSheets);
+      }
+      if (input.includeAnnotatedTags) {
+        for (const tagEntry of this.tags.values()) {
+          if (tagEntry.tagHash) {
+            reachable.add(tagEntry.tagHash);
+          }
+        }
+      }
+      if (input.includeSnapshots) {
+        for (const table of this.tableSnapshots.values()) {
+          this.collectTableObjects(table.hash, reachable, processedTables, processedSheets);
+        }
+      }
+      if (input.includeWorkingState) {
+        this.collectWorkingStateObjects(reachable, processedTables, processedSheets);
+      }
+      if (input.includeStagedChanges) {
+        for (const change of this.index.values()) {
+          this.collectChangeObjectReferences(change, reachable);
+        }
+      }
+      return reachable;
+    }
+    collectCommitObjects(commitHash, visitedCommits, reachable, processedTables, processedSheets) {
+      if (!commitHash || visitedCommits.has(commitHash)) {
+        return;
+      }
+      visitedCommits.add(commitHash);
+      reachable.add(commitHash);
+      const commitObj = this.getObject(commitHash);
+      if (!commitObj) {
+        return;
+      }
+      if (commitObj.tree) {
+        this.collectTableObjects(commitObj.tree, reachable, processedTables, processedSheets);
+      }
+      if (commitObj.parent) {
+        this.collectCommitObjects(commitObj.parent, visitedCommits, reachable, processedTables, processedSheets);
+      }
+    }
+    collectTableObjects(tableHash, reachable, processedTables, processedSheets) {
+      if (!tableHash) {
+        return;
+      }
+      if (processedTables.has(tableHash)) {
+        reachable.add(tableHash);
+        return;
+      }
+      processedTables.add(tableHash);
+      reachable.add(tableHash);
+      const table = this.getObject(tableHash);
+      if (!table) {
+        return;
+      }
+      for (const sheetName of table.getSheetNames()) {
+        const sheetHash = table.getSheetHash(sheetName);
+        if (sheetHash) {
+          this.collectSheetObjects(sheetHash, reachable, processedSheets);
+        }
+      }
+    }
+    collectSheetObjects(sheetHash, reachable, processedSheets) {
+      if (!sheetHash) {
+        return;
+      }
+      if (processedSheets.has(sheetHash)) {
+        reachable.add(sheetHash);
+        return;
+      }
+      processedSheets.add(sheetHash);
+      reachable.add(sheetHash);
+      const sheet = this.getObject(sheetHash);
+      if (!sheet) {
+        return;
+      }
+      for (const { row, col } of sheet.getAllCellPositions()) {
+        const cellHash = sheet.getCellHash(row, col);
+        if (cellHash) {
+          reachable.add(cellHash);
+        }
+      }
+    }
+    collectWorkingStateObjects(reachable, processedTables, processedSheets) {
+      if (this.workingTable) {
+        this.collectTableObjects(this.workingTable.hash, reachable, processedTables, processedSheets);
+      }
+      for (const sheet of this.workingSheets.values()) {
+        this.collectSheetObjects(sheet.hash, reachable, processedSheets);
+      }
+    }
+    collectChangeObjectReferences(change, reachable) {
+      if (!change) {
+        return;
+      }
+      if (change.details instanceof CellObject) {
+        const cell = change.details;
+        if (!this.objects.has(cell.hash)) {
+          this.storeObject(cell);
+        }
+        reachable.add(cell.hash);
+      }
+    }
+    cloneStoredObject(entry, options) {
+      const baseType = entry && typeof entry === "object" && "type" in entry ? entry.type : "raw";
+      const hasPayload = entry && typeof entry === "object" && "payload" in entry;
+      let payload;
+      if (hasPayload) {
+        payload = deepClone(entry.payload);
+      } else if (entry && typeof entry === "object" && typeof entry.toJSON === "function") {
+        payload = deepClone(entry.toJSON());
+      } else {
+        payload = deepClone(entry);
+      }
+      if (options?.stripDefaults) {
+        this.stripPayloadDefaults(baseType, payload);
+      }
+      return {
+        type: baseType,
+        payload
+      };
+    }
+    stripPayloadDefaults(type, payload) {
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+      this.stripUndefinedFields(payload);
+      if (type === "cell" /* CELL */) {
+        if ("formula" in payload && payload.formula === void 0) {
+          delete payload.formula;
+        }
+        if (payload.format && typeof payload.format === "object") {
+          this.stripUndefinedFields(payload.format);
+          if (Object.keys(payload.format).length === 0) {
+            delete payload.format;
+          }
+        }
+      }
+    }
+    stripUndefinedFields(value) {
+      if (!value || typeof value !== "object") {
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          this.stripUndefinedFields(item);
+        }
+        return;
+      }
+      for (const key of Object.keys(value)) {
+        const current = value[key];
+        if (current === void 0) {
+          delete value[key];
+          continue;
+        }
+        this.stripUndefinedFields(current);
+        if (current && typeof current === "object" && !Array.isArray(current) && Object.keys(current).length === 0) {
+          delete value[key];
+        }
+      }
+    }
+    serializeTagEntry(entry, includeDetails) {
+      const base = {
+        commit: entry.commit,
+        type: entry.type,
+        tagHash: entry.tagHash
+      };
+      if (includeDetails && entry.type === "annotated" && entry.tagHash) {
+        const tagObject = this.getObject(entry.tagHash);
+        if (tagObject instanceof TagObject) {
+          base.message = tagObject.message;
+          base.author = tagObject.author;
+          base.email = tagObject.email;
+          base.timestamp = tagObject.timestamp;
+        }
+      }
+      return deepClone(base);
+    }
+    serializeChange(change) {
+      return {
+        type: change.type,
+        sheetName: change.sheetName,
+        details: this.serializeChangeDetails(change.details),
+        timestamp: change.timestamp
+      };
+    }
+    hydrateChange(serialized) {
+      return {
+        type: serialized.type,
+        sheetName: serialized.sheetName,
+        details: this.hydrateChangeDetails(serialized.details),
+        timestamp: serialized.timestamp
+      };
+    }
+    serializeChangeDetails(details) {
+      if (details instanceof CellObject) {
+        return {
+          [_TableGit.SERIALIZED_DETAIL_TYPE_KEY]: "cell" /* CELL */,
+          payload: details.toJSON()
+        };
+      }
+      return deepClone(details);
+    }
+    hydrateChangeDetails(details) {
+      if (details && typeof details === "object") {
+        const typeMarker = details[_TableGit.SERIALIZED_DETAIL_TYPE_KEY];
+        if (typeMarker === "cell" /* CELL */ && "payload" in details) {
+          return CellObject.fromJSON(details.payload);
+        }
+        return deepClone(details);
+      }
+      return details;
     }
   };
 
@@ -2226,6 +3189,17 @@ Date: ${date}`;
     const html = `<ul class="list">${items.map((i) => `<li>${escapeHtml2(i)}</li>`).join("")}</ul>`;
     setHTML(el, html);
   }
+  function isChecked(id, fallback = false) {
+    const input = document.getElementById(id);
+    return input ? !!input.checked : fallback;
+  }
+  function setPersistenceStatus(message) {
+    setText($("persistence-status"), message);
+  }
+  function formatExportFilename() {
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:]/g, "-");
+    return `table-git-${timestamp}.json`;
+  }
   function getSheetNames() {
     if (!repo) return [];
     const sheets = repo.listSheets({ includeStaged: true });
@@ -2330,6 +3304,64 @@ Date: ${date}`;
     } else {
       renderList("columns", ["(\u65E0\u7ED3\u6784)"]);
     }
+    {
+      const el = $("tags");
+      if (el) {
+        const tags = repo.listTags({ withDetails: true });
+        if (!tags.length) {
+          setHTML(el, "(\u65E0\u6807\u7B7E)");
+        } else {
+          const lines = tags.map((tag) => {
+            const summary = `${tag.name} (${tag.type === "annotated" ? "\u6CE8\u91CA" : "\u8F7B\u91CF"}) \u2192 ${tag.target.substring(0, 7)}`;
+            const message = tag.message ? `<div class="muted">${escapeHtml2(tag.message)}</div>` : "";
+            const meta = tag.type === "annotated" && tag.author ? `<div class="muted">${escapeHtml2(tag.author)}${tag.email ? ` &lt;${escapeHtml2(tag.email)}&gt;` : ""}</div>` : "";
+            return `<div><strong>${escapeHtml2(summary)}</strong>${message}${meta}</div>
+						<div class="tag-buttons">
+							<button data-preview-tag="${escapeHtml2(tag.name)}" class="mini">\u9884\u89C8</button>
+							<button data-checkout-tag="${escapeHtml2(tag.name)}" class="mini">\u5207\u6362</button>
+							<button data-delete-tag="${escapeHtml2(tag.name)}" class="mini">\u5220\u9664</button>
+						</div>`;
+          });
+          setHTML(el, `<ul class="list">${lines.map((li) => `<li>${li}</li>`).join("")}</ul>`);
+          el.querySelectorAll("button[data-preview-tag]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              if (!repo) return;
+              const name = btn.getAttribute("data-preview-tag");
+              const info = repo.getTag(name);
+              if (!info) return;
+              previewFrom({ commit: info.target }, `\u6807\u7B7E: ${name}`);
+            });
+          });
+          el.querySelectorAll("button[data-checkout-tag]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              if (!repo) return;
+              const name = btn.getAttribute("data-checkout-tag");
+              const info = repo.getTag(name);
+              if (!info) return;
+              try {
+                repo.checkout(info.target);
+              } catch (e) {
+                console.warn(e);
+              }
+              refreshAll();
+            });
+          });
+          el.querySelectorAll("button[data-delete-tag]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              if (!repo) return;
+              const name = btn.getAttribute("data-delete-tag");
+              if (!window.confirm(`\u786E\u8BA4\u5220\u9664\u6807\u7B7E "${name}"\uFF1F`)) return;
+              try {
+                repo.deleteTag(name);
+              } catch (e) {
+                console.warn(e);
+              }
+              refreshAll();
+            });
+          });
+        }
+      }
+    }
     const branches = repo.getBranches();
     const current = repo.getCurrentBranch();
     {
@@ -2382,12 +3414,40 @@ Date: ${date}`;
       const lines = hist.map((c) => {
         const label = `${c.getShortHash()} - ${c.message}`;
         return `<span>${escapeHtml2(label)}</span>
+							<button data-copy-commit="${escapeHtml2(c.hash)}" class="mini">\u590D\u5236</button>
 							<button data-preview-commit="${escapeHtml2(c.hash)}" class="mini">\u9884\u89C8</button>
 							<button data-checkout-commit="${escapeHtml2(c.hash)}" class="mini">\u5207\u6362</button>`;
       });
       const el = $("history");
       if (el) {
         setHTML(el, `<ul class="list">${lines.map((li) => `<li>${li}</li>`).join("")}</ul>`);
+        el.querySelectorAll("button[data-copy-commit]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const hash = btn.getAttribute("data-copy-commit");
+            if (!hash) return;
+            try {
+              if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(hash);
+              } else {
+                const textarea = document.createElement("textarea");
+                textarea.value = hash;
+                textarea.style.position = "fixed";
+                textarea.style.opacity = "0";
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand("copy");
+                document.body.removeChild(textarea);
+              }
+              btn.textContent = "\u5DF2\u590D\u5236";
+              setTimeout(() => {
+                btn.textContent = "\u590D\u5236";
+              }, 1500);
+            } catch (err) {
+              console.warn("\u590D\u5236\u63D0\u4EA4\u54C8\u5E0C\u5931\u8D25", err);
+              alert("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u9009\u62E9\u63D0\u4EA4 ID");
+            }
+          });
+        });
         el.querySelectorAll("button[data-preview-commit]").forEach((btn) => {
           btn.addEventListener("click", () => {
             const commit = btn.getAttribute("data-preview-commit");
@@ -2504,6 +3564,7 @@ Date: ${date}`;
       seedDemoSheets();
       activeSheet = "default";
       refreshAll();
+      setPersistenceStatus("");
     };
     $("btn-create-branch").onclick = () => {
       if (!repo) return;
@@ -2511,6 +3572,147 @@ Date: ${date}`;
       repo.createBranch(b);
       refreshAll();
     };
+    const btnExport = document.getElementById("btn-export-state");
+    const btnImport = document.getElementById("btn-import-state");
+    const fileInput = document.getElementById("file-import");
+    if (btnExport) {
+      btnExport.onclick = () => {
+        if (!repo) {
+          alert("\u8BF7\u5148\u521D\u59CB\u5316\u4ED3\u5E93");
+          return;
+        }
+        const options = {
+          includeWorkingState: isChecked("export-include-working", true),
+          includeSnapshots: isChecked("export-include-snapshots", false),
+          includeStagedChanges: isChecked("export-include-staged", true)
+        };
+        try {
+          const serialized = repo.exportStateAsJSON(options);
+          const blob = new Blob([serialized], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const filename = formatExportFilename();
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = filename;
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+          setTimeout(() => URL.revokeObjectURL(url), 0);
+          setPersistenceStatus(`\u5DF2\u5BFC\u51FA ${filename}`);
+        } catch (err) {
+          console.warn("\u5BFC\u51FA\u4ED3\u5E93\u5931\u8D25", err);
+          alert(err?.message || "\u5BFC\u51FA\u5931\u8D25");
+          setPersistenceStatus("\u5BFC\u51FA\u5931\u8D25");
+        }
+      };
+    }
+    if (btnImport && fileInput) {
+      btnImport.onclick = () => {
+        if (repo && !window.confirm("\u5BFC\u5165\u5C06\u8986\u76D6\u5F53\u524D\u6F14\u793A\u6570\u636E\uFF0C\u662F\u5426\u7EE7\u7EED\uFF1F")) {
+          return;
+        }
+        fileInput.click();
+      };
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files?.[0];
+        if (!file) {
+          return;
+        }
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(text);
+          const options = {
+            restoreWorkingState: isChecked("import-restore-working", true),
+            restoreSnapshots: isChecked("import-restore-snapshots", true),
+            restoreStagedChanges: isChecked("import-restore-staged", true)
+          };
+          const nextRepo = new TableGit();
+          nextRepo.importState(parsed, options);
+          repo = nextRepo;
+          activeSheet = "default";
+          refreshAll();
+          setPersistenceStatus(`\u5DF2\u5BFC\u5165 ${file.name}`);
+        } catch (err) {
+          console.warn("\u5BFC\u5165\u4ED3\u5E93\u5931\u8D25", err);
+          alert(err?.message || "\u5BFC\u5165\u5931\u8D25");
+          setPersistenceStatus("\u5BFC\u5165\u5931\u8D25");
+        }
+        fileInput.value = "";
+      });
+    }
+    const tagNameInput = document.getElementById("tag-name");
+    const tagTargetInput = document.getElementById("tag-target");
+    const tagMessageInput = document.getElementById("tag-message");
+    const tagAuthorInput = document.getElementById("tag-author");
+    const tagEmailInput = document.getElementById("tag-email");
+    const tagForceInput = document.getElementById("tag-force");
+    const commitAuthorInput = document.getElementById("commit-author");
+    const commitEmailInput = document.getElementById("commit-email");
+    const createTagFromInputs = (explicitAnnotated) => {
+      if (!repo) return;
+      const name = tagNameInput?.value.trim();
+      if (!name) {
+        alert("\u8BF7\u8F93\u5165\u6807\u7B7E\u540D");
+        return;
+      }
+      const target = tagTargetInput?.value.trim();
+      const messageRaw = tagMessageInput?.value.trim();
+      const force = !!tagForceInput?.checked;
+      const shouldAnnotated = explicitAnnotated || !!messageRaw;
+      if (shouldAnnotated && !messageRaw) {
+        alert("\u8BF7\u586B\u5199\u6807\u7B7E\u8BF4\u660E\u4EE5\u521B\u5EFA\u6CE8\u91CA\u6807\u7B7E");
+        return;
+      }
+      try {
+        if (shouldAnnotated) {
+          const author = tagAuthorInput?.value.trim() || commitAuthorInput?.value.trim() || "Tagger";
+          const email = tagEmailInput?.value.trim() || commitEmailInput?.value.trim() || "tagger@example.com";
+          repo.createTag(name, {
+            commit: target || void 0,
+            message: messageRaw,
+            author,
+            email,
+            force
+          });
+        } else {
+          repo.createTag(name, {
+            commit: target || void 0,
+            force
+          });
+        }
+      } catch (e) {
+        alert(e?.message || String(e));
+        return;
+      }
+      refreshAll();
+    };
+    const btnCreateTag = document.getElementById("btn-create-tag");
+    if (btnCreateTag) {
+      btnCreateTag.onclick = () => createTagFromInputs(false);
+    }
+    const btnCreateAnnotatedTag = document.getElementById("btn-create-annotated-tag");
+    if (btnCreateAnnotatedTag) {
+      btnCreateAnnotatedTag.onclick = () => createTagFromInputs(true);
+    }
+    const btnDeleteTag = document.getElementById("btn-delete-tag");
+    if (btnDeleteTag) {
+      btnDeleteTag.onclick = () => {
+        if (!repo) return;
+        const name = tagNameInput?.value.trim();
+        if (!name) {
+          alert("\u8BF7\u8F93\u5165\u8981\u5220\u9664\u7684\u6807\u7B7E\u540D");
+          return;
+        }
+        if (!window.confirm(`\u786E\u8BA4\u5220\u9664\u6807\u7B7E "${name}"\uFF1F`)) return;
+        try {
+          repo.deleteTag(name);
+        } catch (e) {
+          alert(e?.message || String(e));
+          return;
+        }
+        refreshAll();
+      };
+    }
     const btnCreateSheet = document.getElementById("btn-create-sheet");
     if (btnCreateSheet) {
       btnCreateSheet.onclick = () => {
@@ -2629,23 +3831,7 @@ Date: ${date}`;
     if (btnInsertCol) {
       btnInsertCol.onclick = () => {
         if (!repo) return;
-        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-        const adapter = new TableDataAdapter(repo, activeSheet);
-        const data = adapter.build();
-        const nextOrder = (() => {
-          if (sheet) {
-            const ids = sheet.structure.getColumnIds();
-            let max = -1;
-            ids.forEach((id) => {
-              const meta = sheet.structure.getColumn(id);
-              if (meta && typeof meta.order === "number") {
-                max = Math.max(max, meta.order);
-              }
-            });
-            if (max >= 0) return max + 1;
-          }
-          return data.maxCol >= data.minCol ? data.maxCol + 1 : 0;
-        })();
+        const nextOrder = repo.getNextColumnOrder(activeSheet);
         const colId = `col_${generateId("")}`;
         const col = createColumn(colId, { order: nextOrder });
         try {
@@ -2660,23 +3846,7 @@ Date: ${date}`;
     if (btnInsertRow) {
       btnInsertRow.onclick = () => {
         if (!repo) return;
-        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-        const adapter = new TableDataAdapter(repo, activeSheet);
-        const data = adapter.build();
-        const nextOrder = (() => {
-          if (sheet) {
-            const ids = sheet.structure.getRowIds();
-            let max = -1;
-            ids.forEach((id) => {
-              const meta = sheet.structure.getRow(id);
-              if (meta && typeof meta.order === "number") {
-                max = Math.max(max, meta.order);
-              }
-            });
-            if (max >= 0) return max + 1;
-          }
-          return data.maxRow >= data.minRow ? data.maxRow + 1 : 0;
-        })();
+        const nextOrder = repo.getNextRowOrder(activeSheet);
         const row = createRow({ order: nextOrder });
         try {
           repo.addRow(activeSheet, row);
@@ -2701,37 +3871,10 @@ Date: ${date}`;
           alert("\u5217\u7D22\u5F15\u9700\u4E3A\u975E\u8D1F\u6574\u6570");
           return;
         }
-        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-        if (!sheet) {
-          alert("\u5F53\u524D\u5DE5\u4F5C\u8868\u4E3A\u7A7A");
-          return;
-        }
-        let structIds = sheet.structure.getColumnIds();
-        if (structIds.length === 0) {
-          const bounds = sheet.getBounds?.();
-          if (bounds) {
-            for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
-              repo.addColumn(activeSheet, createColumn(`auto_col_${c}`, { order: c }));
-            }
-            const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-            if (refreshed) {
-              structIds = refreshed.structure.getColumnIds();
-            }
-          }
-        }
-        if (colIndex >= structIds.length) {
-          alert("\u7ED3\u6784\u5217\u7D22\u5F15\u4E0D\u5B58\u5728\uFF0C\u8BF7\u68C0\u67E5\u5217\u987A\u5E8F\u3002");
-          return;
-        }
-        const targetId = structIds[colIndex];
-        if (!targetId) {
-          alert("\u672A\u627E\u5230\u5BF9\u5E94\u5217 ID\u3002");
-          return;
-        }
         try {
-          repo.deleteColumn(activeSheet, targetId);
+          repo.deleteColumnByIndex(activeSheet, colIndex);
         } catch (e) {
-          console.warn(e);
+          alert(e?.message || String(e));
         }
         if (input) input.value = "";
         refreshAll();
@@ -2752,37 +3895,10 @@ Date: ${date}`;
           alert("\u884C\u7D22\u5F15\u9700\u4E3A\u975E\u8D1F\u6574\u6570");
           return;
         }
-        const sheet = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-        if (!sheet) {
-          alert("\u5F53\u524D\u5DE5\u4F5C\u8868\u4E3A\u7A7A");
-          return;
-        }
-        let structIds = sheet.structure.getRowIds();
-        if (structIds.length === 0) {
-          const bounds = sheet.getBounds?.();
-          if (bounds) {
-            for (let r = bounds.minRow; r <= bounds.maxRow; r++) {
-              repo.addRow(activeSheet, createRow({ order: r, id: `auto_row_${r}` }));
-            }
-            const refreshed = repo.getPreviewSheet(activeSheet, { includeStaged: true });
-            if (refreshed) {
-              structIds = refreshed.structure.getRowIds();
-            }
-          }
-        }
-        if (rowIndex >= structIds.length) {
-          alert("\u7ED3\u6784\u884C\u7D22\u5F15\u4E0D\u5B58\u5728\uFF0C\u8BF7\u68C0\u67E5\u884C\u987A\u5E8F\u3002");
-          return;
-        }
-        const targetId = structIds[rowIndex];
-        if (!targetId) {
-          alert("\u672A\u627E\u5230\u5BF9\u5E94\u884C ID\u3002");
-          return;
-        }
         try {
-          repo.deleteRow(activeSheet, targetId);
+          repo.deleteRowByIndex(activeSheet, rowIndex);
         } catch (e) {
-          console.warn(e);
+          alert(e?.message || String(e));
         }
         if (input) input.value = "";
         refreshAll();
@@ -2811,6 +3927,14 @@ Date: ${date}`;
     if (!sheets.includes("draft")) {
       repo.duplicateSheet("default", "draft");
       repo.commit("\u590D\u5236\u9ED8\u8BA4\u5DE5\u4F5C\u8868", "System", "system@example.com");
+    }
+    const existingTags = repo.listTags();
+    if (!existingTags.includes("v1.0.0")) {
+      repo.createTag("v1.0.0", {
+        message: "\u521D\u59CB\u6570\u636E\u7248\u672C",
+        author: "System",
+        email: "system@example.com"
+      });
     }
   }
   function main() {

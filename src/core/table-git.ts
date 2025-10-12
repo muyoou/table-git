@@ -1,6 +1,5 @@
 import {
   ChangeType,
-  Change,
   ColumnMetadata,
   RowMetadata,
   SortCriteria,
@@ -12,7 +11,37 @@ import {
   SheetMoveDetails,
   SheetDuplicateDetails
 } from '../types';
-import type { TagInfo } from '../types';
+interface TableGitResolvedExportOptions {
+  preset: 'minimal' | 'full';
+  includeWorkingState: boolean;
+  includeSnapshots: boolean;
+  includeStagedChanges: boolean;
+  roots: TableGitExportRoots;
+  stripDefaults: boolean;
+  stripTagDetails: boolean;
+  limitObjects: boolean;
+}
+
+interface ReachableCollectionInput {
+  roots: TableGitExportRoots;
+  includeWorkingState: boolean;
+  includeSnapshots: boolean;
+  includeStagedChanges: boolean;
+  includeAnnotatedTags: boolean;
+}
+
+import type {
+  Change,
+  TagInfo,
+  SerializedTableGitState,
+  TableGitExportOptions,
+  TableGitImportOptions,
+  SerializedStagedChange,
+  SerializedChange,
+  SerializedTagEntry,
+  SerializedObjectEntry,
+  TableGitExportRoots
+} from '../types';
 import { CellObject } from './cell';
 import { SheetTree } from './sheet';
 import { CommitObject } from './commit';
@@ -32,6 +61,9 @@ export class TableGit {
   private workingTable: TableTree | null; // 当前工作表集合
   private workingSheets: Map<string, SheetTree>; // 工作区中的工作表快照
   private tableSnapshots: Map<string, TableTree>; // 提交对应的表快照
+
+  private static readonly SERIALIZATION_VERSION = 1;
+  private static readonly SERIALIZED_DETAIL_TYPE_KEY = '__tableGitType';
 
   constructor() {
     this.objects = new Map();
@@ -1224,6 +1256,172 @@ export class TableGit {
     return this.getObject(cellHash) as CellObject;
   }
 
+  // ========== 序列化与恢复 ==========
+
+  exportState(options?: TableGitExportOptions): SerializedTableGitState {
+    const config = this.resolveExportOptions(options);
+
+    const refsRecord = Object.fromEntries(this.refs);
+    const tagsRecord: Record<string, SerializedTagEntry> = {};
+    for (const [name, tagEntry] of this.tags.entries()) {
+      tagsRecord[name] = this.serializeTagEntry(tagEntry, !config.stripTagDetails);
+    }
+
+    const reachableHashes: Set<string> = config.limitObjects
+      ? this.collectReachableObjectHashes({
+          roots: config.roots,
+          includeWorkingState: config.includeWorkingState,
+          includeSnapshots: config.includeSnapshots,
+          includeStagedChanges: config.includeStagedChanges,
+          includeAnnotatedTags: true
+        })
+      : new Set<string>(Array.from(this.objects.keys()));
+
+    const objects: SerializedObjectEntry[] = [];
+    const sortedHashes = Array.from(reachableHashes.values()).sort();
+    for (const hash of sortedHashes) {
+      const entry = this.objects.get(hash);
+      if (!entry) continue;
+      const normalized = this.cloneStoredObject(entry, { stripDefaults: config.stripDefaults });
+      objects.push({
+        hash,
+        type: normalized.type,
+        payload: normalized.payload
+      });
+    }
+
+    const state: SerializedTableGitState = {
+      version: TableGit.SERIALIZATION_VERSION,
+      head: this.head,
+      refs: refsRecord,
+      tags: tagsRecord,
+      objects
+    };
+
+    if (config.includeStagedChanges && this.index.size > 0) {
+      state.stagedChanges = Array.from(this.index.entries()).map(([key, change]) => {
+        return {
+          key,
+          change: this.serializeChange(change)
+        };
+      });
+    }
+
+    if (config.includeSnapshots && this.tableSnapshots.size > 0) {
+      state.snapshots = Array.from(this.tableSnapshots.entries()).map(([commit, table]) => {
+        return {
+          commit,
+          table: table.toJSON()
+        };
+      });
+    }
+
+    if (config.includeWorkingState) {
+      const workingState: NonNullable<SerializedTableGitState['workingState']> = {};
+      if (this.workingTable) {
+        workingState.table = this.workingTable.toJSON();
+      }
+      if (this.workingSheets.size > 0) {
+        const sheetRecord: Record<string, any> = {};
+        for (const [name, sheet] of this.workingSheets.entries()) {
+          sheetRecord[name] = sheet.toJSON();
+        }
+        workingState.sheets = sheetRecord;
+      }
+      if (Object.keys(workingState).length > 0) {
+        state.workingState = workingState;
+      }
+    }
+
+    return state;
+  }
+
+  exportStateAsJSON(options?: TableGitExportOptions): string {
+    const state = this.exportState(options);
+    const indent = options?.pretty ? 2 : undefined;
+    return JSON.stringify(state, undefined, indent);
+  }
+
+  importState(state: SerializedTableGitState, options?: TableGitImportOptions): void {
+    if (!state || typeof state !== 'object') {
+      throw new Error('Invalid state data: expected an object');
+    }
+
+    const restoreWorkingState = options?.restoreWorkingState ?? true;
+    const restoreSnapshots = options?.restoreSnapshots ?? true;
+    const restoreStagedChanges = options?.restoreStagedChanges ?? true;
+
+    const version = state.version ?? 1;
+    if (version > TableGit.SERIALIZATION_VERSION) {
+      throw new Error(
+        `State version ${version} is newer than supported version ${TableGit.SERIALIZATION_VERSION}`
+      );
+    }
+
+    this.head = state.head ?? 'main';
+
+    this.refs = new Map(Object.entries(state.refs ?? {}));
+
+    this.tags = new Map();
+    const serializedTags = state.tags ?? {};
+    for (const [name, entry] of Object.entries(serializedTags)) {
+      if (!entry?.commit || !entry.type) {
+        continue;
+      }
+      this.tags.set(name, {
+        commit: entry.commit,
+        type: entry.type,
+        tagHash: entry.tagHash
+      });
+    }
+
+    this.objects = new Map();
+    for (const entry of state.objects ?? []) {
+      if (!entry?.hash) {
+        continue;
+      }
+      this.objects.set(entry.hash, {
+        type: entry.type,
+        payload: deepClone(entry.payload)
+      });
+    }
+
+    this.index = new Map();
+    if (restoreStagedChanges && state.stagedChanges) {
+      for (const staged of state.stagedChanges) {
+        if (!staged?.key || !staged.change) {
+          continue;
+        }
+        this.index.set(staged.key, this.hydrateChange(staged.change));
+      }
+    }
+
+    this.tableSnapshots = new Map();
+    if (restoreSnapshots && state.snapshots) {
+      for (const snapshot of state.snapshots) {
+        if (!snapshot?.commit || !snapshot.table) {
+          continue;
+        }
+        this.tableSnapshots.set(snapshot.commit, TableTree.fromJSON(snapshot.table));
+      }
+    }
+
+    const hasWorkingState = restoreWorkingState && state.workingState?.table;
+    if (hasWorkingState) {
+      const table = TableTree.fromJSON(state.workingState?.table);
+      const overrides = new Map<string, SheetTree>();
+      const serializedSheets = state.workingState?.sheets ?? {};
+      for (const [name, sheetJson] of Object.entries(serializedSheets)) {
+        overrides.set(name, SheetTree.fromJSON(sheetJson));
+      }
+      this.loadWorkingState(table, overrides.size > 0 ? overrides : undefined);
+    } else {
+      this.workingTable = null;
+      this.workingSheets = new Map();
+      this.loadWorkingTree();
+    }
+  }
+
   // ========== 内部工具 ==========
 
   private loadWorkingState(table: TableTree, sheetOverrides?: Map<string, SheetTree>): void {
@@ -1264,5 +1462,390 @@ export class TableGit {
       return true;
     }
     return false;
+  }
+
+  private resolveExportOptions(options?: TableGitExportOptions): TableGitResolvedExportOptions {
+    const preset = options?.preset ?? 'minimal';
+
+    const normalizeSet = (values?: string[]): string[] | undefined => {
+      if (!values) return undefined;
+      const unique = new Set<string>();
+      for (const value of values) {
+        if (typeof value === 'string' && value.trim().length > 0) {
+          unique.add(value.trim());
+        }
+      }
+      return unique.size > 0 ? Array.from(unique) : undefined;
+    };
+
+    const roots: TableGitExportRoots = {
+      includeHead: options?.roots?.includeHead ?? true,
+      includeAllBranches: options?.roots?.includeAllBranches ?? false,
+      includeAllTags: options?.roots?.includeAllTags ?? false,
+      branches: normalizeSet(options?.roots?.branches),
+      tags: normalizeSet(options?.roots?.tags),
+      commits: normalizeSet(options?.roots?.commits)
+    };
+
+    const includeWorkingState = options?.includeWorkingState ?? (preset === 'full');
+    const includeSnapshots = options?.includeSnapshots ?? false;
+    const includeStagedChanges = options?.includeStagedChanges ?? (preset === 'full');
+    const stripDefaults = options?.stripDefaults ?? (preset === 'minimal');
+    const stripTagDetails = options?.stripTagDetails ?? (preset === 'minimal');
+    const limitObjects = preset === 'minimal' || !!options?.roots;
+
+    return {
+      preset,
+      includeWorkingState,
+      includeSnapshots,
+      includeStagedChanges,
+      roots,
+      stripDefaults,
+      stripTagDetails,
+      limitObjects
+    };
+  }
+
+  private resolveExportRoots(roots: TableGitExportRoots): Set<string> {
+    const commits = new Set<string>();
+
+    const includeHead = roots.includeHead ?? true;
+    if (includeHead) {
+      const headCommit = this.getCurrentCommitHash();
+      if (headCommit) {
+        commits.add(headCommit);
+      }
+    }
+
+    if (roots.includeAllBranches) {
+      for (const hash of this.refs.values()) {
+        if (hash) {
+          commits.add(hash);
+        }
+      }
+    }
+
+    if (roots.branches) {
+      for (const branch of roots.branches) {
+        const hash = this.refs.get(branch);
+        if (hash) {
+          commits.add(hash);
+        }
+      }
+    }
+
+    if (roots.includeAllTags) {
+      for (const entry of this.tags.values()) {
+        if (entry.commit) {
+          commits.add(entry.commit);
+        }
+      }
+    }
+
+    if (roots.tags) {
+      for (const tagName of roots.tags) {
+        const tag = this.tags.get(tagName);
+        if (tag?.commit) {
+          commits.add(tag.commit);
+        }
+      }
+    }
+
+    if (roots.commits) {
+      for (const commit of roots.commits) {
+        if (commit) {
+          commits.add(commit);
+        }
+      }
+    }
+
+    return commits;
+  }
+
+  private collectReachableObjectHashes(input: ReachableCollectionInput): Set<string> {
+    const reachable = new Set<string>();
+    const visitedCommits = new Set<string>();
+    const processedTables = new Set<string>();
+    const processedSheets = new Set<string>();
+
+    const roots = this.resolveExportRoots(input.roots);
+    for (const commitHash of roots) {
+      this.collectCommitObjects(commitHash, visitedCommits, reachable, processedTables, processedSheets);
+    }
+
+    if (input.includeAnnotatedTags) {
+      for (const tagEntry of this.tags.values()) {
+        if (tagEntry.tagHash) {
+          reachable.add(tagEntry.tagHash);
+        }
+      }
+    }
+
+    if (input.includeSnapshots) {
+      for (const table of this.tableSnapshots.values()) {
+        this.collectTableObjects(table.hash, reachable, processedTables, processedSheets);
+      }
+    }
+
+    if (input.includeWorkingState) {
+      this.collectWorkingStateObjects(reachable, processedTables, processedSheets);
+    }
+
+    if (input.includeStagedChanges) {
+      for (const change of this.index.values()) {
+        this.collectChangeObjectReferences(change, reachable);
+      }
+    }
+
+    return reachable;
+  }
+
+  private collectCommitObjects(
+    commitHash: string | undefined,
+    visitedCommits: Set<string>,
+    reachable: Set<string>,
+    processedTables: Set<string>,
+    processedSheets: Set<string>
+  ): void {
+    if (!commitHash || visitedCommits.has(commitHash)) {
+      return;
+    }
+
+    visitedCommits.add(commitHash);
+    reachable.add(commitHash);
+
+    const commitObj = this.getObject(commitHash) as CommitObject | undefined;
+    if (!commitObj) {
+      return;
+    }
+
+    if (commitObj.tree) {
+      this.collectTableObjects(commitObj.tree, reachable, processedTables, processedSheets);
+    }
+
+    if (commitObj.parent) {
+      this.collectCommitObjects(commitObj.parent, visitedCommits, reachable, processedTables, processedSheets);
+    }
+  }
+
+  private collectTableObjects(
+    tableHash: string | undefined,
+    reachable: Set<string>,
+    processedTables: Set<string>,
+    processedSheets: Set<string>
+  ): void {
+    if (!tableHash) {
+      return;
+    }
+
+    if (processedTables.has(tableHash)) {
+      reachable.add(tableHash);
+      return;
+    }
+
+    processedTables.add(tableHash);
+    reachable.add(tableHash);
+
+    const table = this.getObject(tableHash) as TableTree | undefined;
+    if (!table) {
+      return;
+    }
+
+    for (const sheetName of table.getSheetNames()) {
+      const sheetHash = table.getSheetHash(sheetName);
+      if (sheetHash) {
+        this.collectSheetObjects(sheetHash, reachable, processedSheets);
+      }
+    }
+  }
+
+  private collectSheetObjects(
+    sheetHash: string | undefined,
+    reachable: Set<string>,
+    processedSheets: Set<string>
+  ): void {
+    if (!sheetHash) {
+      return;
+    }
+
+    if (processedSheets.has(sheetHash)) {
+      reachable.add(sheetHash);
+      return;
+    }
+
+    processedSheets.add(sheetHash);
+    reachable.add(sheetHash);
+
+    const sheet = this.getObject(sheetHash) as SheetTree | undefined;
+    if (!sheet) {
+      return;
+    }
+
+    for (const { row, col } of sheet.getAllCellPositions()) {
+      const cellHash = sheet.getCellHash(row, col);
+      if (cellHash) {
+        reachable.add(cellHash);
+      }
+    }
+  }
+
+  private collectWorkingStateObjects(
+    reachable: Set<string>,
+    processedTables: Set<string>,
+    processedSheets: Set<string>
+  ): void {
+    if (this.workingTable) {
+      this.collectTableObjects(this.workingTable.hash, reachable, processedTables, processedSheets);
+    }
+
+    for (const sheet of this.workingSheets.values()) {
+      this.collectSheetObjects(sheet.hash, reachable, processedSheets);
+    }
+  }
+
+  private collectChangeObjectReferences(change: Change, reachable: Set<string>): void {
+    if (!change) {
+      return;
+    }
+
+    if (change.details instanceof CellObject) {
+      const cell = change.details as CellObject;
+      if (!this.objects.has(cell.hash)) {
+        this.storeObject(cell);
+      }
+      reachable.add(cell.hash);
+    }
+  }
+
+  private cloneStoredObject(entry: any, options?: { stripDefaults?: boolean }): { type: string; payload: any } {
+    const baseType = entry && typeof entry === 'object' && 'type' in entry ? (entry as any).type : 'raw';
+    const hasPayload = entry && typeof entry === 'object' && 'payload' in entry;
+
+    let payload: any;
+    if (hasPayload) {
+      payload = deepClone((entry as any).payload);
+    } else if (entry && typeof entry === 'object' && typeof (entry as any).toJSON === 'function') {
+      payload = deepClone((entry as any).toJSON());
+    } else {
+      payload = deepClone(entry);
+    }
+
+    if (options?.stripDefaults) {
+      this.stripPayloadDefaults(baseType, payload);
+    }
+
+    return {
+      type: baseType,
+      payload
+    };
+  }
+
+  private stripPayloadDefaults(type: string, payload: any): void {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+
+    this.stripUndefinedFields(payload);
+
+    if (type === ObjectType.CELL) {
+      if ('formula' in payload && payload.formula === undefined) {
+        delete payload.formula;
+      }
+      if (payload.format && typeof payload.format === 'object') {
+        this.stripUndefinedFields(payload.format);
+        if (Object.keys(payload.format).length === 0) {
+          delete payload.format;
+        }
+      }
+    }
+  }
+
+  private stripUndefinedFields(value: any): void {
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        this.stripUndefinedFields(item);
+      }
+      return;
+    }
+
+    for (const key of Object.keys(value)) {
+      const current = value[key];
+      if (current === undefined) {
+        delete value[key];
+        continue;
+      }
+      this.stripUndefinedFields(current);
+      if (current && typeof current === 'object' && !Array.isArray(current) && Object.keys(current).length === 0) {
+        delete value[key];
+      }
+    }
+  }
+
+  private serializeTagEntry(
+    entry: { commit: string; type: 'lightweight' | 'annotated'; tagHash?: string },
+    includeDetails: boolean
+  ): SerializedTagEntry {
+    const base: SerializedTagEntry = {
+      commit: entry.commit,
+      type: entry.type,
+      tagHash: entry.tagHash
+    };
+
+    if (includeDetails && entry.type === 'annotated' && entry.tagHash) {
+      const tagObject = this.getObject(entry.tagHash) as TagObject | undefined;
+      if (tagObject instanceof TagObject) {
+        base.message = tagObject.message;
+        base.author = tagObject.author;
+        base.email = tagObject.email;
+        base.timestamp = tagObject.timestamp;
+      }
+    }
+
+    return deepClone(base);
+  }
+
+  private serializeChange(change: Change): SerializedChange {
+    return {
+      type: change.type,
+      sheetName: change.sheetName,
+      details: this.serializeChangeDetails(change.details),
+      timestamp: change.timestamp
+    };
+  }
+
+  private hydrateChange(serialized: SerializedChange): Change {
+    return {
+      type: serialized.type,
+      sheetName: serialized.sheetName,
+      details: this.hydrateChangeDetails(serialized.details),
+      timestamp: serialized.timestamp
+    };
+  }
+
+  private serializeChangeDetails(details: any): any {
+    if (details instanceof CellObject) {
+      return {
+        [TableGit.SERIALIZED_DETAIL_TYPE_KEY]: ObjectType.CELL,
+        payload: details.toJSON()
+      };
+    }
+
+    return deepClone(details);
+  }
+
+  private hydrateChangeDetails(details: any): any {
+    if (details && typeof details === 'object') {
+      const typeMarker = (details as Record<string, any>)[TableGit.SERIALIZED_DETAIL_TYPE_KEY];
+      if (typeMarker === ObjectType.CELL && 'payload' in (details as Record<string, any>)) {
+        return CellObject.fromJSON((details as Record<string, any>).payload);
+      }
+      return deepClone(details);
+    }
+
+    return details;
   }
 }

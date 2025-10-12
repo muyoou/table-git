@@ -57,6 +57,10 @@ repo.commit('初始化产品表', 'Alice', 'alice@example.com');
 - [格式化器体系](./doc/formatters.md)
 - [高级主题](./doc/advanced-topics.md)
 
+## 💡 Demo 提示
+
+仓库自带的 `demo/index.html` 交互演示包含“导出仓库到文件 / 从文件导入”按钮，支持将当前演示数据保存为 JSON 文件并在之后重新载入。默认导出启用了精简模式（`preset: 'minimal'`），只包含当前引用可达的对象；若需要附带工作区、暂存区或快照，可通过复选框显式开启。导出流程使用 `TableGit.exportStateAsJSON`，默认不再做额外的空格缩进，从而减小文件体积。使用 `npm run dev` 启动示例即可在浏览器中试用。
+
 ## 🧪 测试 & 构建
 
 ```bash

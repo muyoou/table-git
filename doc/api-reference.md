@@ -69,6 +69,29 @@ const repo: TableGit = createTableGit('main');
 | `getStagedChanges()` | 返回已暂存的变更列表。 |
 | `getCommitHistory(limit?)` | 获取提交历史，可限制数量。 |
 
+### 数据持久化
+
+| 方法 | 说明 |
+| ---- | ---- |
+| `exportState(options?)` | 返回一个纯数据对象（`SerializedTableGitState`），用于自定义持久化（数据库、远端服务等）。默认采用 `'minimal'` 预设，仅导出当前引用可达的对象集合，不附带工作区 / 暂存区 / 快照。 |
+| `importState(state, options?)` | 从 `exportState` 返回的数据恢复仓库状态。默认还原暂存区、快照与工作区，可通过选项关闭。 |
+| `exportStateAsJSON(options?)` | 基于 `exportState` 直接返回 JSON 字符串。默认无需额外格式化（无空格换行），若传入 `pretty: true` 则输出带缩进的可读版。 |
+
+`exportState` 支持的关键选项：
+
+- `includeWorkingState`：是否附带当前工作表与工作区缓存（`'minimal'` 预设默认为 `false`，`'full'` 预设为 `true`）。
+- `includeSnapshots`（默认 `false`）：导出 `tableSnapshots`，适合频繁切换提交而不想重新构建快照的场景。
+- `includeStagedChanges` (`'minimal'` 预设默认 `false`，`'full'` 预设 `true`)：是否返回暂存区记录。
+- `preset`：`'minimal' | 'full'`，默认为 `'minimal'`。精简模式仅导出当前引用可达的对象，且默认关闭工作区、暂存区与标签冗余信息；`'full'` 模式与旧行为相同。
+- `roots`：指定根引用集合并裁剪导出的对象集合（例如只导出指定分支/标签/提交）。
+- `stripDefaults`、`stripTagDetails`：控制是否移除默认值或标签的注释信息。精简模式默认开启。
+
+`importState` 支持的选项：
+
+- `restoreWorkingState`（默认 `true`）：如导入数据中包含工作区则直接使用，否则自动根据 HEAD 重建。
+- `restoreSnapshots`（默认 `true`）：导入快照提升后续切换性能。
+- `restoreStagedChanges`（默认 `true`）：保留暂存区，方便在持久化后继续提交。
+
 ## DiffMergeEngine
 
 负责基于 `TableGit` 仓库计算差异并执行合并。
