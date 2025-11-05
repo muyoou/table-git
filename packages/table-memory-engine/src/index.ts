@@ -3,6 +3,8 @@ export * from './core/table-adapter';
 export * from './core/tag-parser';
 export * from './core/formatter';
 export * from './core/event-bus';
+export * from './core/repository-metadata';
+export * from './core/repository-manager';
 export * from './runtime/graph-types';
 export { FlowBuilder } from './runtime/flow-builder';
 export { NodeRuntime } from './runtime/node-runtime';

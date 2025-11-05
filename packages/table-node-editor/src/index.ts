@@ -15,3 +15,10 @@ export type {
 	EditorVariableState,
 	EditorVariableType
 } from './types';
+export {
+	WorkflowSerializer,
+	WorkflowManager,
+	type SerializedWorkflow,
+	type WorkflowExportOptions,
+	type WorkflowImportOptions
+} from './workflow-serializer';
