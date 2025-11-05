@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020", "DOM"],
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@table-git/memory-engine": ["../table-memory-engine/src/index"],
+      "@table-git/memory-engine/*": ["../table-memory-engine/src/*"],
+      "table-git": ["../../src/index"],
+      "table-git/*": ["../../src/*"]
+    },
+    "rootDirs": ["./src", "../table-memory-engine/src"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests/**/*"]
+}

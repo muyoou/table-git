@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node Editor 演示</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #0f172a;
+        --panel: #ffffff;
+        --accent: #3b82f6;
+        --muted: #64748b;
+        --border: rgba(15, 23, 42, 0.08);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+        background: var(--bg);
+        color: #111827;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        padding: 20px 24px 12px;
+        color: #f8fafc;
+      }
+      header h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+      }
+      header p {
+        margin: 0;
+        color: rgba(226, 232, 240, 0.85);
+      }
+      main {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        gap: 16px;
+        padding: 0 24px 24px;
+      }
+      @media (max-width: 900px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+      .panel {
+        background: var(--panel);
+        border-radius: 16px;
+        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.16);
+        border: 1px solid var(--border);
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .panel h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+      .panel p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+      textarea {
+        width: 100%;
+        min-height: 220px;
+        resize: vertical;
+        font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+        font-size: 13px;
+        border-radius: 12px;
+        border: 1px solid rgba(100, 116, 139, 0.35);
+        padding: 12px;
+        background: rgba(241, 245, 249, 0.8);
+      }
+      button {
+        appearance: none;
+        border: none;
+        border-radius: 999px;
+        padding: 10px 18px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+      }
+      button.primary {
+        background: linear-gradient(135deg, #2563eb, #4f46e5);
+        color: #fff;
+        box-shadow: 0 10px 20px rgba(37, 99, 235, 0.25);
+      }
+      button.secondary {
+        background: rgba(15, 23, 42, 0.08);
+        color: #1f2937;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
+        box-shadow: none !important;
+      }
+      button:not(:disabled):hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 26px rgba(37, 99, 235, 0.25);
+      }
+      .button-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .status {
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .status[data-tone="error"] {
+        color: #ef4444;
+      }
+      pre {
+        max-height: 200px;
+        overflow: auto;
+        background: #0f172a;
+        color: #f8fafc;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(15, 23, 42, 0.4);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      #node-editor-wrapper {
+        position: relative;
+        height: 100%;
+        min-height: 640px;
+        border-radius: 18px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: radial-gradient(circle at top, rgba(79, 70, 229, 0.12), transparent 55%),
+          #0b1220;
+        padding: 12px;
+        display: flex;
+      }
+      #node-editor-root {
+        flex: 1;
+        border-radius: 14px;
+        position: relative;
+        overflow: hidden;
+      }
+      #snapshot-view table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      #snapshot-view th,
+      #snapshot-view td {
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        padding: 6px 8px;
+        text-align: left;
+        background: rgba(248, 250, 252, 0.9);
+      }
+      .variables-panel {
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(241, 245, 249, 0.72);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .variables-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .variable-item {
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 10px;
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .variable-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+        color: #0f172a;
+      }
+      .variable-type-badge {
+        background: rgba(37, 99, 235, 0.18);
+        color: #1d4ed8;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 2px 8px;
+      }
+      .variable-meta {
+        font-size: 12px;
+        color: #475569;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .variable-dirty {
+        color: #db2777;
+        font-weight: 600;
+      }
+      .variable-value-editor {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: stretch;
+      }
+      .variable-value-editor input,
+      .variable-value-editor textarea {
+        flex: 1;
+        min-width: 160px;
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.65);
+        padding: 6px 8px;
+        font-size: 12px;
+        font-family: inherit;
+        background: rgba(248, 250, 252, 0.9);
+      }
+      .variable-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .variable-actions button,
+      .variable-value-editor button {
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+      .variable-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .variable-form-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .variable-form-row > label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+        min-width: 140px;
+        font-size: 12px;
+        color: #475569;
+      }
+      .variable-form-row input,
+      .variable-form-row select,
+      .variable-form-row textarea {
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.6);
+        padding: 6px 8px;
+        font-size: 13px;
+        font-family: inherit;
+        background: rgba(248, 250, 252, 0.9);
+      }
+      .variable-form-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .variable-form-actions button {
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .variable-hint {
+        font-size: 12px;
+        color: #64748b;
+      }
+      .variable-error {
+        font-size: 12px;
+        color: #ef4444;
+      }
+      .note {
+        font-size: 13px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Table Memory Node Editor</h1>
+      <p>拖拽节点、连线并执行流程，查看表格在内存中的实时快照。</p>
+    </header>
+    <main>
+      <section class="panel">
+        <h2>流程控制</h2>
+        <p>编辑对话指令（JSON 格式），点击执行将依次运行加载、解析、应用和格式化节点。</p>
+        <div class="button-row">
+          <button id="btn-run-flow" class="primary">执行流程</button>
+          <button id="btn-reset-graph" class="secondary">重置流程</button>
+        </div>
+        <div id="run-status" class="status"></div>
+        <label for="conversation-input" class="note">对话指令</label>
+        <textarea id="conversation-input" spellcheck="false"></textarea>
+        <div>
+          <h3 style="margin: 16px 0 8px; font-size: 15px;">变量管理</h3>
+          <p class="note">变量在每次执行前会恢复为默认值，可在此新建、编辑或调整当前值。</p>
+          <div class="variables-panel">
+            <div id="variables-empty" class="note">暂无变量</div>
+            <div id="variables-list" class="variables-list"></div>
+            <button id="btn-reset-variables" type="button" class="secondary">重置当前值为默认值</button>
+            <form id="variable-form" class="variable-form">
+              <div class="variable-form-row">
+                <label>
+                  变量名称
+                  <input id="variable-name" placeholder="例如 snapshotId" required />
+                </label>
+                <label>
+                  变量类型
+                  <select id="variable-type">
+                    <option value="string">字符串</option>
+                    <option value="number">数字</option>
+                    <option value="boolean">布尔</option>
+                    <option value="array">数组 (JSON)</option>
+                    <option value="object">对象 (JSON)</option>
+                  </select>
+                </label>
+              </div>
+              <div class="variable-form-row">
+                <label>
+                  默认值
+                  <textarea id="variable-default" rows="2" placeholder="根据类型填写默认值"></textarea>
+                </label>
+              </div>
+              <div class="variable-form-actions">
+                <button id="variable-submit" type="submit" class="primary">保存变量</button>
+                <button id="variable-cancel" type="button" class="secondary" style="visibility:hidden" disabled>取消编辑</button>
+              </div>
+              <div id="variable-error" class="variable-error"></div>
+              <div class="variable-hint">字符串可直接填写文本；布尔支持 true/false；数组与对象请提供 JSON 字符串。</div>
+            </form>
+          </div>
+        </div>
+        <div>
+          <h3 style="margin: 16px 0 8px; font-size: 15px;">格式化输出</h3>
+          <pre id="run-output"></pre>
+        </div>
+        <div>
+          <h3 style="margin: 16px 0 8px; font-size: 15px;">调试输出</h3>
+          <pre id="debug-output" style="max-height: 160px; overflow: auto;">暂无调试输出</pre>
+        </div>
+        <div>
+          <h3 style="margin: 16px 0 8px; font-size: 15px;">最新快照</h3>
+          <div id="snapshot-view" class="note">暂无数据</div>
+        </div>
+      </section>
+      <section class="panel" style="padding: 0;">
+        <div id="node-editor-wrapper">
+          <div id="node-editor-root"></div>
+        </div>
+      </section>
+    </main>
+    <script src="node-editor-bundle.js"></script>
+  </body>
+</html>
