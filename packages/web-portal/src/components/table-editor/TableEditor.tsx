@@ -67,7 +67,7 @@ const EditableCell: React.FC<EditableCellProps> = ({ value, onSave }) => {
   );
 };
 
-export const TableEditor: React.FC<TableEditorProps> = ({
+const TableEditorComponent: React.FC<TableEditorProps> = ({
   data: initialData,
   columns: initialColumns,
   metadata,
@@ -287,4 +287,4 @@ export const TableEditor: React.FC<TableEditorProps> = ({
   );
 };
 
-export default TableEditor;
+export const TableEditor = TableEditorComponent;

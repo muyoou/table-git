@@ -15,9 +15,9 @@ export interface CreateMarketItemInput {
   tags?: string[];
   readme: string;
   license: string;
-  repository_state?: string;
+  repository_state?: unknown;
   repository_metadata?: Record<string, unknown>;
-  workflow_data?: string;
+  workflow_data?: unknown;
 }
 
 export interface UpdateMarketItemInput {
@@ -26,9 +26,9 @@ export interface UpdateMarketItemInput {
   tags?: string[];
   readme?: string;
   license?: string;
-  repository_state?: string;
+  repository_state?: unknown;
   repository_metadata?: Record<string, unknown>;
-  workflow_data?: string;
+  workflow_data?: unknown;
 }
 
 export interface MarketSearchFilters {
@@ -181,9 +181,9 @@ export class MarketService {
    * Clone a market item (for repositories and hybrid items)
    */
   static async clone(id: string): Promise<{
-    repository_state?: string;
+    repository_state?: unknown;
     repository_metadata?: Record<string, unknown>;
-    workflow_data?: string;
+    workflow_data?: unknown;
   }> {
     const item = await this.get(id);
     if (!item) {
@@ -207,8 +207,8 @@ export class MarketService {
    * Get merge data for a market item
    */
   static async getMergeData(id: string): Promise<{
-    repository_state?: string;
-    workflow_data?: string;
+    repository_state?: unknown;
+    workflow_data?: unknown;
   }> {
     const item = await this.get(id);
     if (!item) {

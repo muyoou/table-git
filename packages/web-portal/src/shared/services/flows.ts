@@ -10,21 +10,21 @@ import type { Flow, GlobalFlow } from '../types/database';
 export interface CreateFlowInput {
   name: string;
   description?: string;
-  workflow_data: string;
+  workflow_data: unknown;
   template_id?: string;
 }
 
 export interface UpdateFlowInput {
   name?: string;
   description?: string;
-  workflow_data?: string;
+  workflow_data?: unknown;
   template_id?: string;
 }
 
 export interface CreateGlobalFlowInput {
   name: string;
   description?: string;
-  workflow_data: string;
+  workflow_data: unknown;
   enabled?: boolean;
   priority?: number;
 }
@@ -32,7 +32,7 @@ export interface CreateGlobalFlowInput {
 export interface UpdateGlobalFlowInput {
   name?: string;
   description?: string;
-  workflow_data?: string;
+  workflow_data?: unknown;
   enabled?: boolean;
   priority?: number;
 }

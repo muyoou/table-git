@@ -67,7 +67,7 @@ export default function TemplatesPage() {
           管理模板与关联的表格仓库、节点流程。实际数据将来自 Supabase 表。
         </Paragraph>
       </Space>
-      <Card className="shadow-sm" extra={<Link href="/console/templates/new"><Button type="primary">新建模板</Button></Link>}>
+      <Card className="shadow-sm" extra={<Link href="/console/templates/new"><Button type="primary">New Template</Button></Link>}>
         <Table columns={columns} dataSource={dataSource} pagination={false} />
       </Card>
     </Space>

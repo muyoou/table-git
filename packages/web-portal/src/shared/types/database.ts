@@ -46,8 +46,8 @@ export interface Template {
   id: string;
   name: string;
   description?: string;
-  // Serialized TableGit repository state
-  repository_state: string;
+  // Serialized TableGit repository state (stored as JSONB, accessed as object)
+  repository_state: unknown;
   // Repository metadata
   repository_metadata: Record<string, unknown>;
   // IDs of associated flows
@@ -62,8 +62,8 @@ export interface Conversation {
   id: string;
   name: string;
   template_id: string;
-  // Current state of the table (TableGit serialized state)
-  current_state: string;
+  // Current state of the table (TableGit serialized state, stored as JSONB)
+  current_state: unknown;
   user_id: string;
   created_at: string;
   updated_at: string;
@@ -74,8 +74,8 @@ export interface Flow {
   id: string;
   name: string;
   description?: string;
-  // Serialized workflow from WorkflowSerializer
-  workflow_data: string;
+  // Serialized workflow from WorkflowSerializer (stored as JSONB, accessed as object)
+  workflow_data: unknown;
   // Optional template ID if this flow belongs to a template
   template_id?: string;
   user_id: string;
@@ -88,7 +88,7 @@ export interface GlobalFlow {
   id: string;
   name: string;
   description?: string;
-  workflow_data: string;
+  workflow_data: unknown;
   enabled: boolean;
   priority: number;
   user_id: string;
@@ -111,11 +111,11 @@ export interface MarketItem {
   readme: string;
   // License/usage declaration
   license: string;
-  // For repository type: serialized state
-  repository_state?: string;
+  // For repository type: serialized state (stored as JSONB)
+  repository_state?: unknown;
   repository_metadata?: Record<string, unknown>;
-  // For flow type: serialized workflow
-  workflow_data?: string;
+  // For flow type: serialized workflow (stored as JSONB)
+  workflow_data?: unknown;
   // For hybrid type: both
   // Stats
   clone_count: number;

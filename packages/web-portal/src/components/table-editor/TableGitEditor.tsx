@@ -24,7 +24,7 @@ export interface TableGitEditorProps {
   onRepositoryChange?: (repo: Repository) => void;
 }
 
-export const TableGitEditor: React.FC<TableGitEditorProps> = ({
+const TableGitEditorComponent: React.FC<TableGitEditorProps> = ({
   repositoryId,
   repositoryManager,
   sheetId,
@@ -139,4 +139,4 @@ export const TableGitEditor: React.FC<TableGitEditorProps> = ({
   );
 };
 
-export default TableGitEditor;
+export const TableGitEditor = TableGitEditorComponent;

@@ -10,12 +10,12 @@ import type { Conversation, ConversationMessage } from '../types/database';
 export interface CreateConversationInput {
   name: string;
   template_id: string;
-  current_state: string;
+  current_state: unknown;
 }
 
 export interface UpdateConversationInput {
   name?: string;
-  current_state?: string;
+  current_state?: unknown;
 }
 
 export interface CreateMessageInput {
@@ -170,7 +170,7 @@ export class ConversationService {
   static async updateStateWithMessage(
     conversationId: string,
     userId: string,
-    newState: string,
+    newState: unknown,
     message: CreateMessageInput
   ): Promise<{ conversation: Conversation; message: ConversationMessage }> {
     if (!supabase) {

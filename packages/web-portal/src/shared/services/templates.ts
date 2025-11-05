@@ -10,7 +10,7 @@ import type { Template } from '../types/database';
 export interface CreateTemplateInput {
   name: string;
   description?: string;
-  repository_state: string;
+  repository_state: unknown;
   repository_metadata?: Record<string, unknown>;
   flow_ids?: string[];
 }
@@ -18,7 +18,7 @@ export interface CreateTemplateInput {
 export interface UpdateTemplateInput {
   name?: string;
   description?: string;
-  repository_state?: string;
+  repository_state?: unknown;
   repository_metadata?: Record<string, unknown>;
   flow_ids?: string[];
 }
